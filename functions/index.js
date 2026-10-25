@@ -188,6 +188,7 @@ exports.getReviewEntry=onCall(opts,async r=>{
    guardianEmail:isAdmin(r)?d.guardianEmail||"":null,
    ageBand:d.ageBand||"unknown",
    verifiedEligibility:d.verifiedEligibility===true,
+   endorsementCount:d.endorsementCount||0,
    reviewCount:votes.size,approveVotes:votes.docs.filter(x=>x.get("recommend")==="select").length,
    myReview:votes.docs.find(x=>x.id===r.auth.uid)?.data()||null,
    recusalCount:recusals.size,
@@ -211,7 +212,7 @@ exports.recordReview=onCall(opts,async r=>{
  const snap=await ref.get();
  if(!snap.exists)throw new HttpsError("not-found","Entry not found.");
  if((await ref.collection("recusals").doc(r.auth.uid).get()).exists)throw new HttpsError("permission-denied","You are recused.");
- if(snap.get("status")==="selected"||snap.get("status")==="not_selected")throw new HttpsError("failed-precondition","The decision is finalized.");
+ if(["selected","not_selected","merged","withdrawn"].includes(snap.get("status")))throw new HttpsError("failed-precondition","Entry is not open for review.");
  const scores=r.data?.scores||{},max={character:30,perseverance:25,service:20,leadership:15,potential:10},out={};
  for(const [k,m] of Object.entries(max)){const n=Number(scores[k]);if(!Number.isInteger(n)||n<0||n>m)err("Invalid score: "+k);out[k]=n;}
  const recommend=str(r.data?.recommend,20);
@@ -233,7 +234,7 @@ exports.setEligibility=onCall(opts,async r=>{
  if(!s.exists)throw new HttpsError("not-found","Entry not found.");
  if(eligible&&(!Number.isFinite(s.get("gpa"))||s.get("gpa")<2.5))
    throw new HttpsError("failed-precondition","Verify an unweighted GPA of at least 2.5 before approving eligibility.");
- if(["selected","not_selected"].includes(s.get("status")))throw new HttpsError("failed-precondition","Final decision is locked.");
+ if(["selected","not_selected","merged","withdrawn"].includes(s.get("status")))throw new HttpsError("failed-precondition","Entry is no longer open for decisions.");
  await ref.update({verifiedEligibility:eligible,eligibilityNote:str(r.data?.notes,1000),status:eligible?"under_review":"screening",lastUpdatedAt:stamp()});
  await audit("eligibility_review",id,r.auth.uid,{eligible});
  return {ok:true};
@@ -341,7 +342,7 @@ exports.finalizeDecision=onCall(opts,async r=>{
  const entry=db.collection("entries").doc(id),snap=await entry.get();
  if(!snap.exists)throw new HttpsError("not-found","Entry not found.");
  const d=snap.data();
- if(["selected","not_selected"].includes(d.status))throw new HttpsError("failed-precondition","Decision already finalized.");
+ if(["selected","not_selected","merged","withdrawn"].includes(d.status))throw new HttpsError("failed-precondition","Entry cannot be finalized.");
  if(!d.verifiedEligibility)throw new HttpsError("failed-precondition","Eligibility must be verified first.");
  const votes=await entry.collection("reviews").get();
  if(votes.size<3||votes.size>5)throw new HttpsError("failed-precondition","Require 3–5 independent committee reviews.");
@@ -528,4 +529,35 @@ exports.invalidateReference=onCall(opts,async r=>{
  await ref.update({referenceCount:count,referenceStatus:count>=2?"verified":"pending",lastUpdatedAt:stamp()});
  await audit("reference_invalidated",entryId,r.auth.uid,{slot,reason});
  return {ok:true};
+});
+
+exports.mergeNomination=onCall(opts,async r=>{
+ owner(r);
+ const sourceId=str(r.data?.sourceEntryId,140),destId=str(r.data?.destinationEntryId,140);
+ if(!sourceId||!destId||sourceId===destId)err("Select two different application IDs.");
+ const sourceRef=db.collection("entries").doc(sourceId),destRef=db.collection("entries").doc(destId);
+ const [s,d]=await Promise.all([sourceRef.get(),destRef.get()]);
+ if(!s.exists||!d.exists)throw new HttpsError("not-found","Entry not found.");
+ const source=s.data(),dest=d.data();
+ if(source.type!=="nomination")throw new HttpsError("failed-precondition","Only nominations can become supporting endorsements.");
+ if(source.duplicateKey!==dest.duplicateKey||source.cycle!==dest.cycle)
+  throw new HttpsError("failed-precondition","These entries do not match on normalized student name, school, year and cycle.");
+ if(["selected","not_selected","merged","withdrawn"].includes(source.status))
+  throw new HttpsError("failed-precondition","Source nomination has already been finalized.");
+ if(["selected","not_selected","merged","withdrawn"].includes(dest.status))
+  throw new HttpsError("failed-precondition","Destination is not accepting more endorsements.");
+ const endorsement=destRef.collection("endorsements").doc(sourceId);
+ await db.runTransaction(async tx=>{
+  const [currentSource,currentDestination,old]=await Promise.all([tx.get(sourceRef),tx.get(destRef),tx.get(endorsement)]);
+  if(old.exists||currentSource.get("status")==="merged")throw new HttpsError("already-exists","Nomination already merged.");
+  tx.create(endorsement,{
+   sourceEntryId:sourceId,statement:source.personalStatement,
+   privacy:source.privacy||"confidential",nominator:source.nominator||null,
+   message:source.nominator?.message||"",mergedAt:stamp(),mergedBy:r.auth.uid
+  });
+  tx.update(destRef,{endorsementCount:admin.firestore.FieldValue.increment(1),lastUpdatedAt:stamp()});
+  tx.update(sourceRef,{status:"merged",mergedInto:destId,mergedAt:stamp(),lastUpdatedAt:stamp()});
+ });
+ await audit("nomination_merged",sourceId,r.auth.uid,{destinationEntryId:destId});
+ return {ok:true,destinationEntryId:destId};
 });
