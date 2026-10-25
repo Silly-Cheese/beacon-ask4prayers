@@ -68,3 +68,13 @@ input::placeholder,textarea::placeholder{color:#938577}
 @media(max-width:940px){.form-layout{grid-template-columns:1fr}.form-aside{position:static}}
 @media(max-width:650px){.wizard-step{padding:20px}.wizard-step legend{font-size:1.45rem}.wizard-actions{justify-content:stretch}.wizard-actions .btn{flex:1}.wizard-actions .help{order:3;flex-basis:100%}.portal-grid{grid-template-columns:1fr}.paper-document{padding:24px}.review-card{padding:18px}}
 @media print{body{background:#fff!important;color:#000!important}.site-header,.site-footer,.view-page>*:not(.print-only),.footer-cta,.notice{display:none!important}#scholar-view{display:block!important;padding:0!important;min-height:0!important}.paper-document{display:block!important;box-shadow:none!important;border:0!important;color:#000!important;max-width:none!important;page-break-inside:avoid}.paper-document:not(.print-target){display:none!important}.paper-document.print-target{display:block!important}#scholar-content{display:block!important;border:none!important;padding:0!important;background:#fff!important}#scholar-content>*:not(.paper-document){display:none!important}}
+
+@media print{
+ body>header,body>footer,body>.notice,#public-view,#apply-view,#nominate-view,#account-view,#dashboard-view,#committee-view,#policy-view,#reference-view,#consent-view,#claim-view{display:none!important}
+ main{display:block!important}
+ #scholar-view{display:block!important}
+ #scholar-view>.back-link,#scholar-view>.section-kicker,#scholar-view>h1{display:none!important}
+ #scholar-content{display:block!important;background:white!important;color:black!important;box-shadow:none!important;border:none!important}
+ .paper-document{display:none!important}
+ .paper-document.print-target{display:block!important;margin:0 auto!important}
+}
