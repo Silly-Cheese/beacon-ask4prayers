@@ -1,103 +1,339 @@
 "use strict";
-const { onCall, HttpsError } = require("firebase-functions/v2/https");
-const { defineString } = require("firebase-functions/params");
-const admin = require("firebase-admin");
+const {onCall,HttpsError}=require("firebase-functions/v2/https");
+const {defineString}=require("firebase-functions/params");
+const admin=require("firebase-admin");
+const crypto=require("node:crypto");
 admin.initializeApp();
-const db = admin.firestore();
-// Intake stays CLOSED until consent, reference invitation and anti-abuse
-// procedures are reviewed. Set BEACON_INTAKE_OPEN=true when actually ready.
-const intakeOpen = defineString("BEACON_INTAKE_OPEN", { default: "false" });
-const cors = ["https://beacon.ask4prayers.com","https://silly-cheese.github.io"];
-const options = { region: "us-central1", cors, maxInstances: 10, memory: "256MiB" };
-const text = (v,max=160) => typeof v==="string"?v.trim().slice(0,max):"";
-function email(v) {
-  const value=text(v,254);
-  if (!value) return "";
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) throw new HttpsError("invalid-argument","Please provide a valid email address.");
-  return value.toLowerCase();
+const db=admin.firestore();
+const open=defineString("BEACON_INTAKE_OPEN",{default:"false"});
+const cycle="2027";
+const origin="https://beacon.ask4prayers.com";
+const opts={region:"us-central1",cors:[origin,"https://silly-cheese.github.io"],maxInstances:10,memory:"256MiB",enforceAppCheck:true};
+const stamp=()=>admin.firestore.FieldValue.serverTimestamp();
+const clean=(v,n=180)=>typeof v==="string"?v.trim().slice(0,n):"";
+const mail=v=>{const s=clean(v,254).toLowerCase();if(s&&!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s))throw new HttpsError("invalid-argument","Invalid email address.");return s;};
+const err=(m)=>{throw new HttpsError("invalid-argument",m);};
+const requireAuth=r=>{if(!r.auth?.uid||r.auth.token.firebase?.sign_in_provider==="anonymous")throw new HttpsError("unauthenticated","Sign in with your Beacon account first.");};
+const staff=r=>{requireAuth(r);if(!(r.auth.token.admin===true||r.auth.token.reviewer===true))throw new HttpsError("permission-denied","Committee access required.");};
+const owner=r=>{requireAuth(r);if(r.auth.token.admin!==true)throw new HttpsError("permission-denied","Administrator access required.");};
+const isAdmin=r=>r.auth?.token?.admin===true;
+const gate=()=>{if(open.value()!=="true")throw new HttpsError("failed-precondition","Public intake is not open yet.");};
+const hash=v=>crypto.createHash("sha256").update(v).digest("hex");
+const SECRET=(v)=>crypto.randomBytes(32).toString("base64url");
+const str=(v,max=180)=>clean(v,max);
+const y=v=>{const n=Number(v);return Number.isInteger(n)&&n>=2026&&n<=2040?n:null;};
+const bool=v=>v===true;
+const dedupe=o=>hash([o.studentName,o.school,o.graduationYear].map(x=>String(x).toLowerCase().trim().replace(/\s+/g,"")).join("|"));
+function references(v) {
+ if(!Array.isArray(v))return [];
+ return v.slice(0,2).map(x=>({name:str(x?.name,120),email:mail(x?.email),relationship:str(x?.relationship,100)}))
+  .filter(x=>x.name||x.email);
 }
-function authenticated(req) {
-  if (!req.auth || !req.auth.uid) throw new HttpsError("unauthenticated","Sign in to submit an entry.");
+function normalize(v) {
+ const d=v&&typeof v==="object"?v:{};
+ const o={
+ studentName:str(d.studentName,120),preferredName:str(d.preferredName,100),
+ school:str(d.school,160),grade:str(d.grade,4),graduationYear:y(d.graduationYear),
+ state:str(d.state,80),educationType:str(d.educationType,40),
+ applicantEmail:mail(d.applicantEmail),ageBand:str(d.ageBand,20),
+ gpa:d.gpa===""||d.gpa==null?null:Number(d.gpa),
+ academicInterests:str(d.academicInterests,1800),futureGoals:str(d.futureGoals,1800),
+ activities:str(d.activities,2400),service:str(d.service,2400),responsibilities:str(d.responsibilities,2400),
+ honors:str(d.honors,1600),personalStatement:str(d.personalStatement,6000),
+ additionalInfo:str(d.additionalInfo,2000),guardianName:str(d.guardianName,120),
+ guardianEmail:mail(d.guardianEmail),guardianRelationship:str(d.guardianRelationship,100),
+ references:references(d.references)
+ };
+ if(o.gpa!==null&&(!Number.isFinite(o.gpa)||o.gpa<0||o.gpa>4))err("GPA must be between 0 and 4.0 (unweighted).");
+ return o;
 }
-function validateEntry(req) {
-  const p=req.data||{},type=p.type;
-  if (!["self","nomination"].includes(type)) throw new HttpsError("invalid-argument","Invalid entry type.");
-  const studentName=text(p.studentName,120),school=text(p.school,160),grade=text(p.grade,3),year=Number(p.graduationYear),statement=text(p.statement,6000);
-  if(studentName.length<3||school.length<2||!["9","10","11","12"].includes(grade)||!Number.isInteger(year)||year<2026||year>2040)
-    throw new HttpsError("invalid-argument","Complete the student's name, school, grade and graduation year.");
-  if(statement.length<180) throw new HttpsError("invalid-argument","Please provide a more complete personal statement or nomination.");
-  const privacy=type==="self"?"self":text(p.privacy,20);
-  if(type==="nomination"&&!["named","confidential","anonymous"].includes(privacy))
-    throw new HttpsError("invalid-argument","Select a nomination privacy option.");
-  const nominatorName=privacy==="anonymous"?"":text(p.nominatorName,120);
-  const nominatorEmail=privacy==="anonymous"?"":email(p.nominatorEmail);
-  if(type==="nomination"&&privacy!=="anonymous"&&(nominatorName.length<3||!nominatorEmail))
-    throw new HttpsError("invalid-argument","Please provide nominator name and email, or select fully anonymous.");
-  if(type==="self"&&(req.auth.token.firebase?.sign_in_provider==="anonymous"||!req.auth.token.email_verified))
-    throw new HttpsError("failed-precondition","Verify your student account email before submitting.");
-  const refs=(Array.isArray(p.references)?p.references:[]).slice(0,2).map((r)=>({
-    name:text(r?.name,120),email:email(r?.email)
-  }));
-  while(refs.length<2) refs.push({name:"",email:""});
-  if(refs.some(r=>(r.name&&!r.email)||(!r.name&&r.email)))
-    throw new HttpsError("invalid-argument","Provide both name and email for any listed reference.");
-  return {
-    type,studentName,school,grade,graduationYear:year,statement,
-    privacy,nominatorName,nominatorEmail,relationship:text(p.relationship,120),
-    message:text(p.message,1500),studentContact:email(p.studentContact),
-    guardianEmail:email(p.guardianEmail),minor:!!p.minor,references:refs,
-    cycle:2027 // Initial recognition cycle; future cycles require an admin-managed setting.
-  };
+function validateFinal(d){
+ if(d.studentName.length<3||d.school.length<2||!["9","10","11","12"].includes(d.grade)||!d.graduationYear)err("Complete your name, school, grade and graduation year.");
+ if(d.personalStatement.length<180)err("Please complete the personal essay.");
+ if(d.ageBand!=="adult"&&d.ageBand!=="minor")err("Please indicate whether you are under 18.");
+ if(d.ageBand==="minor"&&!d.guardianEmail)err("Provide a guardian email so consent can be requested.");
+ if(d.references.length!==2||d.references.some(x=>!x.name||!x.email)||d.references[0].email===d.references[1].email)err("Provide two different references with names and email addresses.");
+ // GPA is documented at eligibility screening; nominations may lack access to grades.
 }
-exports.submitEntry=onCall(options,async(req)=>{
-  if (intakeOpen.value()!=="true") throw new HttpsError("failed-precondition","Applications are not open yet.");
-  authenticated(req);
-  // IMPORTANT: No open public intake without Firebase App Check enforcement.
-  // An anonymous Firebase Auth identity is not sufficient anti-abuse protection.
-  if(!req.app) throw new HttpsError("failed-precondition","App verification is required.");
-  const p=validateEntry(req);
-  const uid=req.auth.uid;
-  const day=new Date().toISOString().slice(0,10);
-  const quota=db.collection("submissionQuotas").doc(uid+"_"+day);
+const safeSummary=(d,id)=>({entryId:id,studentName:d.studentName||"",type:d.type||"self",cycle:d.cycle||cycle,status:d.status||"draft",grade:d.grade||"",referenceStatus:d.referenceStatus||"pending",guardianStatus:d.guardianStatus||"pending",createdAt:d.createdAt?.toDate?.()?.toISOString?.()||null});
+async function audit(action,entryId,uid,extra={}){await db.collection("auditLogs").add({action,entryId,actorUid:uid||null,at:stamp(),...extra});}
+exports.getProgramSettings=onCall({...opts,enforceAppCheck:false},async()=>({cycle,intakeOpen:open.value()==="true",honoraryOnly:true}));
+exports.getDraft=onCall(opts,async r=>{
+ requireAuth(r);
+ const snap=await db.collection("drafts").doc(r.auth.uid+"_"+cycle).get();
+ return {draft:snap.exists?snap.data().fields:null,updatedAt:snap.data()?.updatedAt?.toDate?.()?.toISOString?.()||null};
+});
+exports.saveDraft=onCall(opts,async r=>{
+ requireAuth(r);gate();
+ const fields=normalize(r.data?.fields);
+ await db.collection("drafts").doc(r.auth.uid+"_"+cycle).set({uid:r.auth.uid,cycle,fields,updatedAt:stamp()},{merge:true});
+ return {saved:true};
+});
+exports.submitEntry=onCall(opts,async r=>{
+ gate();
+ const type=str(r.data?.type,24);
+ if(type==="self"){
+  requireAuth(r);
+  if(r.auth.token.email_verified!==true)throw new HttpsError("failed-precondition","Verify your account email before final submission.");
+  const draft=await db.collection("drafts").doc(r.auth.uid+"_"+cycle).get();
+  if(!draft.exists)err("Save your application first.");
+  const d=draft.data().fields;validateFinal(d);
+  const key=db.collection("selfSubmissionKeys").doc(cycle+"_"+r.auth.uid);
   const entry=db.collection("entries").doc();
-  const selfKey=db.collection("selfSubmissionKeys").doc(p.cycle+"_"+uid);
-  await db.runTransaction(async(tx)=>{
-    const reads=[tx.get(quota)];
-    if(p.type==="self")reads.push(tx.get(selfKey));
-    const results=await Promise.all(reads);
-    const existing=Number(results[0].data()?.count||0);
-    if(existing>=3)throw new HttpsError("resource-exhausted","Daily submission limit reached.");
-    if(p.type==="self"&&results[1].exists)throw new HttpsError("already-exists","You already submitted an application for this cycle.");
-    tx.set(quota,{count:existing+1,lastAt:admin.firestore.FieldValue.serverTimestamp()},{merge:true});
-    if(p.type==="self")tx.create(selfKey,{entryId:entry.id,createdAt:admin.firestore.FieldValue.serverTimestamp()});
+  await db.runTransaction(async tx=>{
+    const prior=await tx.get(key);
+    if(prior.exists)throw new HttpsError("already-exists","You have already submitted an entry this cycle.");
+    tx.create(key,{entryId:entry.id,createdAt:stamp()});
     tx.create(entry,{
-      ...p,entryId:entry.id,submitterUid:p.privacy==="anonymous"?null:uid,
-      applicantUid:p.type==="self"?uid:null,
-      submittedAt:admin.firestore.FieldValue.serverTimestamp(),
-      status:"submitted",selectionReady:false,guardianConsentStatus:"not_verified",
-      referencesStatus:"not_verified",reviewDecision:null,
-      // Nominator contact details are confidential and must not appear in public outputs.
-      lastUpdatedAt:admin.firestore.FieldValue.serverTimestamp()
+      ...d,type:"self",entryId:entry.id,cycle,status:"submitted",applicantUid:r.auth.uid,
+      submitterUid:r.auth.uid,submittedAt:stamp(),createdAt:stamp(),lastUpdatedAt:stamp(),
+      publicId:null,guardianStatus:d.ageBand==="adult"?"not_required":"pending",
+      referenceStatus:"pending",referenceCount:0,selectionReady:false,decision:null,
+      duplicateKey:dedupe(d)
     });
   });
-  return {entryId:entry.id,received:true};
+  await audit("self_submitted",entry.id,r.auth.uid);
+  return {received:true,entryId:entry.id};
+ }
+ if(type!=="nomination")err("Unknown submission type.");
+ if(!r.auth?.uid)throw new HttpsError("unauthenticated","Sign in or use the anonymous entry mode.");
+ const d=normalize(r.data?.fields);
+ if(d.studentName.length<3||d.school.length<2||!["9","10","11","12"].includes(d.grade)||!d.graduationYear||d.personalStatement.length<180)
+  err("Provide the student name, school, grade, year and a meaningful nomination statement.");
+ const privacy=str(r.data?.privacy,20);
+ if(!["named","confidential","anonymous"].includes(privacy))err("Choose a nomination privacy preference.");
+ const nominator={
+  name:privacy==="anonymous"?"":str(r.data?.nominatorName,120),
+  email:privacy==="anonymous"?"":mail(r.data?.nominatorEmail),
+  relationship:privacy==="anonymous"?"":str(r.data?.relationship,100),
+  message:str(r.data?.message,1800)
+ };
+ if(privacy!=="anonymous"){
+  requireAuth(r);
+  if(!r.auth.token.email_verified||!nominator.name||nominator.email!==r.auth.token.email?.toLowerCase())
+   throw new HttpsError("failed-precondition","Named and confidential nominators must sign in with their verified matching email.");
+ }
+ const doc=db.collection("entries").doc();
+ const day=new Date().toISOString().slice(0,10);
+ // per UID quota is intentionally conservative; App Check is also mandatory.
+ const quota=db.collection("submissionQuotas").doc(hash(r.auth.uid+day));
+ await db.runTransaction(async tx=>{
+  const q=await tx.get(quota),n=Number(q.data()?.count||0);
+  if(n>=2)throw new HttpsError("resource-exhausted","Daily nomination limit reached.");
+  tx.set(quota,{count:n+1,updatedAt:stamp()},{merge:true});
+  tx.create(doc,{
+   ...d,personalStatement:d.personalStatement,type:"nomination",privacy,nominator,
+   cycle,status:"submitted",entryId:doc.id,
+   submitterUid:privacy==="anonymous"?null:r.auth.uid,applicantUid:null,
+   submittedAt:stamp(),createdAt:stamp(),lastUpdatedAt:stamp(),publicId:null,
+   guardianStatus:"pending",referenceStatus:"pending",referenceCount:0,selectionReady:false,
+   decision:null,duplicateKey:dedupe(d)
+  });
+ });
+ await audit("nomination_submitted",doc.id,privacy==="anonymous"?null:r.auth.uid,{privacy});
+ return {received:true,entryId:doc.id};
 });
-exports.getMyEntries=onCall(options,async(req)=>{
-  authenticated(req);
-  if(req.auth.token.firebase?.sign_in_provider==="anonymous")
-    throw new HttpsError("permission-denied","Use a verified student account.");
-  const snapshot=await db.collection("entries").where("applicantUid","==",req.auth.uid).limit(30).get();
-  return {entries:snapshot.docs.map(d=>({
-    entryId:d.id,studentName:d.get("studentName"),cycle:d.get("cycle"),status:d.get("status")
-  }))};
+exports.getMyEntries=onCall(opts,async r=>{
+ requireAuth(r);
+ const q=await db.collection("entries").where("applicantUid","==",r.auth.uid).limit(30).get();
+ return {entries:q.docs.map(s=>safeSummary(s.data(),s.id))};
 });
-exports.listReviewQueue=onCall(options,async(req)=>{
-  authenticated(req);
-  if(req.auth.token.admin!==true&&req.auth.token.reviewer!==true)
-    throw new HttpsError("permission-denied","Reviewer access is required.");
-  const snapshot=await db.collection("entries").orderBy("submittedAt","desc").limit(50).get();
-  return {entries:snapshot.docs.map(d=>({
-    entryId:d.id,studentName:d.get("studentName"),type:d.get("type"),
-    grade:d.get("grade"),status:d.get("status"),cycle:d.get("cycle")
-  }))};
+exports.getMyEntry=onCall(opts,async r=>{
+ requireAuth(r);
+ const id=str(r.data?.entryId,140),doc=await db.collection("entries").doc(id).get();
+ if(!doc.exists||doc.get("applicantUid")!==r.auth.uid)throw new HttpsError("permission-denied","Entry unavailable.");
+ const d=doc.data();
+ return {entry:{
+   ...safeSummary(d,doc.id),preferredName:d.preferredName||"",
+   school:d.school,submittedAt:d.submittedAt?.toDate?.()?.toISOString?.()||null,
+   guardianStatus:d.guardianStatus,referenceStatus:d.referenceStatus,
+   selectedAt:d.selectedAt?.toDate?.()?.toISOString?.()||null,publicId:d.publicId||null,
+   founderNote:d.founderNote||"",recognitionName:d.recognitionName||d.studentName,
+   deliveryPreference:d.deliveryPreference||"digital",opportunities:true
+ }};
+});
+exports.listReviewQueue=onCall(opts,async r=>{
+ staff(r);
+ const q=await db.collection("entries").orderBy("submittedAt","desc").limit(80).get();
+ return {entries:q.docs.map(s=>safeSummary(s.data(),s.id))};
+});
+exports.getReviewEntry=onCall(opts,async r=>{
+ staff(r);
+ const id=str(r.data?.entryId,140),snap=await db.collection("entries").doc(id).get();
+ if(!snap.exists)throw new HttpsError("not-found","Entry not found.");
+ const d=snap.data();
+ const refs=await db.collection("entries").doc(id).collection("references").get();
+ const votes=await db.collection("entries").doc(id).collection("reviews").get();
+ const recusals=await db.collection("entries").doc(id).collection("recusals").get();
+ if(recusals.docs.some(x=>x.id===r.auth.uid))throw new HttpsError("permission-denied","You have recused yourself from reviewing this entry.");
+ return {entry:{
+   ...safeSummary(d,id),school:d.school,graduationYear:d.graduationYear,gpa:d.gpa,
+   personalStatement:d.personalStatement,activities:d.activities,academicInterests:d.academicInterests,
+   service:d.service,futureGoals:d.futureGoals,responsibilities:d.responsibilities,
+   honors:d.honors,additionalInfo:d.additionalInfo,guardianStatus:d.guardianStatus,
+   referenceStatus:d.referenceStatus,referenceCount:d.referenceCount||0,
+   referenceSuggestions:d.references||[],
+   nominator:isAdmin(r)&&d.privacy!=="anonymous"?d.nominator:null,
+   duplicateKey:d.duplicateKey,verifiedEligibility:d.verifiedEligibility===true,
+   references:refs.docs.map(x=>({id:x.id,...x.data()})),
+   reviewCount:votes.size,approveVotes:votes.docs.filter(x=>x.get("recommend")==="select").length,
+   myReview:votes.docs.find(x=>x.id===r.auth.uid)?.data()||null,
+   recusalCount:recusals.size,
+   founderNote:isAdmin(r)?d.founderNote||"":""
+ }};
+});
+exports.recuse=onCall(opts,async r=>{
+ staff(r);
+ const id=str(r.data?.entryId,140),reason=str(r.data?.reason,400);
+ if(reason.length<5)err("Provide a brief reason for recusal.");
+ const ref=db.collection("entries").doc(id);
+ if(!(await ref.get()).exists)throw new HttpsError("not-found","Entry not found.");
+ await ref.collection("recusals").doc(r.auth.uid).set({reason,uid:r.auth.uid,at:stamp()});
+ await ref.collection("reviews").doc(r.auth.uid).delete();
+ await audit("reviewer_recused",id,r.auth.uid);
+ return {ok:true};
+});
+exports.recordReview=onCall(opts,async r=>{
+ staff(r);
+ const id=str(r.data?.entryId,140),ref=db.collection("entries").doc(id);
+ const snap=await ref.get();
+ if(!snap.exists)throw new HttpsError("not-found","Entry not found.");
+ if((await ref.collection("recusals").doc(r.auth.uid).get()).exists)throw new HttpsError("permission-denied","You are recused.");
+ if(snap.get("status")==="selected"||snap.get("status")==="not_selected")throw new HttpsError("failed-precondition","The decision is finalized.");
+ const scores=r.data?.scores||{},max={character:30,perseverance:25,service:20,leadership:15,potential:10},out={};
+ for(const [k,m] of Object.entries(max)){const n=Number(scores[k]);if(!Number.isInteger(n)||n<0||n>m)err("Invalid score: "+k);out[k]=n;}
+ const recommend=str(r.data?.recommend,20);
+ if(!["select","decline","discuss"].includes(recommend))err("Select a recommendation.");
+ await ref.collection("reviews").doc(r.auth.uid).set({
+  uid:r.auth.uid,scores:out,total:Object.values(out).reduce((a,b)=>a+b,0),
+  recommend,notes:str(r.data?.notes,2400),submittedAt:stamp()
+ });
+ await audit("committee_review",id,r.auth.uid);
+ return {ok:true};
+});
+exports.setEligibility=onCall(opts,async r=>{
+ owner(r);
+ const id=str(r.data?.entryId,140),eligible=r.data?.eligible===true;
+ const ref=db.collection("entries").doc(id),s=await ref.get();
+ if(!s.exists)throw new HttpsError("not-found","Entry not found.");
+ if(["selected","not_selected"].includes(s.get("status")))throw new HttpsError("failed-precondition","Final decision is locked.");
+ await ref.update({verifiedEligibility:eligible,eligibilityNote:str(r.data?.notes,1000),status:eligible?"under_review":"screening",lastUpdatedAt:stamp()});
+ await audit("eligibility_review",id,r.auth.uid,{eligible});
+ return {ok:true};
+});
+exports.createInvitation=onCall(opts,async r=>{
+ owner(r);
+ const entryId=str(r.data?.entryId,140),kind=str(r.data?.kind,25),slot=Number(r.data?.slot);
+ if(!["reference","guardian"].includes(kind))err("Choose guardian or reference.");
+ if(kind==="reference"&&![0,1].includes(slot))err("Choose reference 1 or 2.");
+ const ref=db.collection("entries").doc(entryId),s=await ref.get();
+ if(!s.exists)throw new HttpsError("not-found","Entry not found.");
+ const d=s.data();
+ if(["selected","not_selected"].includes(d.status))throw new HttpsError("failed-precondition","Decision already finalized.");
+ const recipient=kind==="guardian"?{name:d.guardianName||"Guardian",email:d.guardianEmail}:{...(d.references||[])[slot]};
+ if(!recipient?.email)throw new HttpsError("failed-precondition","This entry is missing the recipient email. Ask applicant to correct it.");
+ const token=SECRET(),invite=db.collection("invitations").doc(hash(token)),expires=Date.now()+14*86400000;
+ await invite.set({entryId,kind,slot:kind==="reference"?slot:null,recipientName:recipient.name||"",recipientEmail:recipient.email,status:"pending",createdBy:r.auth.uid,createdAt:stamp(),expiresAt:admin.firestore.Timestamp.fromMillis(expires),usedAt:null});
+ await audit("invitation_created",entryId,r.auth.uid,{kind,slot});
+ // Only an admin receives this private URL. Send to the verified intended recipient via a secure channel.
+ return {url:origin+"/#"+(kind==="guardian"?"consent/":"reference/")+token,recipientEmail:recipient.email,expiresAt:new Date(expires).toISOString()};
+});
+exports.getInvitation=onCall(opts,async r=>{
+ const token=str(r.data?.token,150),s=await db.collection("invitations").doc(hash(token)).get();
+ if(!s.exists||s.get("expiresAt").toMillis()<Date.now()||s.get("status")!=="pending")throw new HttpsError("not-found","This invitation has expired or was already used.");
+ return {kind:s.get("kind"),recipientName:s.get("recipientName"),expiresAt:s.get("expiresAt").toDate().toISOString()};
+});
+exports.respondInvitation=onCall(opts,async r=>{
+ const token=str(r.data?.token,150),ref=db.collection("invitations").doc(hash(token));
+ const response=r.data?.response||{};
+ const type=str(response.type,30),fullName=str(response.fullName,120),signature=str(response.signature,120);
+ if(!fullName||!signature||!bool(response.attest))err("Provide full name, electronic signature and confirmation.");
+ const snap=await ref.get();
+ if(!snap.exists||snap.get("expiresAt").toMillis()<Date.now()||snap.get("status")!=="pending")throw new HttpsError("not-found","This invitation is invalid or expired.");
+ const i=snap.data(),entryRef=db.collection("entries").doc(i.entryId);
+ if(i.kind==="reference"){
+  if(type!=="reference")err("Invalid response type.");
+  const answers=[0,1,2,3,4].map(n=>str(response["answer"+n],1600));
+  if(answers.some(x=>x.length<15))err("Complete all five reference questions.");
+  const target=entryRef.collection("references").doc(String(i.slot));
+  await db.runTransaction(async tx=>{
+   const [fresh,entry]=await Promise.all([tx.get(ref),tx.get(entryRef)]);
+   if(fresh.get("status")!=="pending"||!entry.exists)throw new HttpsError("failed-precondition","Invitation unavailable.");
+   tx.set(target,{fullName,signature,answers,recipientEmail:i.recipientEmail,slot:i.slot,submittedAt:stamp(),verified:false});
+   tx.update(ref,{status:"completed",usedAt:stamp()});
+   tx.update(entryRef,{referenceStatus:"awaiting_verification",lastUpdatedAt:stamp()});
+  });
+ }else{
+  if(type!=="guardian")err("Invalid response type.");
+  if(!bool(response.consent)||!bool(response.isGuardian))err("Consent and guardian authority are both required.");
+  await db.runTransaction(async tx=>{
+   const [fresh,entry]=await Promise.all([tx.get(ref),tx.get(entryRef)]);
+   if(fresh.get("status")!=="pending"||!entry.exists)throw new HttpsError("failed-precondition","Invitation unavailable.");
+   tx.update(entryRef,{guardianStatus:"signed_pending_verification",guardianRecord:{
+     fullName,signature,relationship:str(response.relationship,100),
+     consent:true,publicityConsent:bool(response.publicityConsent),
+     signedAt:new Date().toISOString(),consentVersion:"2027-v1",verified:false},
+     lastUpdatedAt:stamp()});
+   tx.update(ref,{status:"completed",usedAt:stamp()});
+  });
+ }
+ await audit("invitation_completed",i.entryId,null,{kind:i.kind,slot:i.slot});
+ return {ok:true};
+});
+exports.verifyRequirement=onCall(opts,async r=>{
+ owner(r);
+ const id=str(r.data?.entryId,140),kind=str(r.data?.kind,20),slot=Number(r.data?.slot);
+ if(!["guardian","reference"].includes(kind))err("Invalid requirement.");
+ const entry=db.collection("entries").doc(id),s=await entry.get();
+ if(!s.exists)throw new HttpsError("not-found","Entry not found.");
+ if(kind==="reference"){
+  if(![0,1].includes(slot))err("Invalid reference.");
+  const doc=entry.collection("references").doc(String(slot)),rs=await doc.get();
+  if(!rs.exists)throw new HttpsError("failed-precondition","Reference not submitted.");
+  await doc.update({verified:true,verifiedBy:r.auth.uid,verifiedAt:stamp()});
+  const both=await entry.collection("references").get();
+  const count=both.docs.filter(x=>x.id==="0"||x.id==="1").filter(x=>x.get("verified")===true||x.id===String(slot)).length;
+  await entry.update({referenceCount:count,referenceStatus:count>=2?"verified":"pending"});
+ }else{
+  if(!s.get("guardianRecord")?.consent)throw new HttpsError("failed-precondition","Guardian has not signed.");
+  await entry.update({"guardianRecord.verified":true,"guardianRecord.verifiedBy":r.auth.uid,guardianStatus:"verified"});
+ }
+ await audit("requirement_verified",id,r.auth.uid,{kind,slot});
+ return {ok:true};
+});
+exports.finalizeDecision=onCall(opts,async r=>{
+ owner(r);
+ const id=str(r.data?.entryId,140),decision=str(r.data?.decision,20),note=str(r.data?.founderNote,3400);
+ if(!["select","decline"].includes(decision))err("Invalid decision.");
+ const entry=db.collection("entries").doc(id),snap=await entry.get();
+ if(!snap.exists)throw new HttpsError("not-found","Entry not found.");
+ const d=snap.data();
+ if(["selected","not_selected"].includes(d.status))throw new HttpsError("failed-precondition","Decision already finalized.");
+ if(!d.verifiedEligibility)throw new HttpsError("failed-precondition","Eligibility must be verified first.");
+ const votes=await entry.collection("reviews").get();
+ if(votes.size<3||votes.size>5)throw new HttpsError("failed-precondition","Require 3–5 independent committee reviews.");
+ if(decision==="select"&&votes.docs.filter(x=>x.get("recommend")==="select").length<2)throw new HttpsError("failed-precondition","Selection needs at least two favorable recommendations.");
+ if(decision==="select"&&(d.referenceCount||0)<2)throw new HttpsError("failed-precondition","Two verified references are required.");
+ if(decision==="select"&&d.ageBand!=="adult"&&d.guardianStatus!=="verified")throw new HttpsError("failed-precondition","Guardian consent must be verified.");
+ const publicId="BCN-"+cycle+"-"+id.slice(0,8).toUpperCase();
+ await entry.update({status:decision==="select"?"selected":"not_selected",decision,selectedAt:decision==="select"?stamp():null,
+  publicId:decision==="select"?publicId:null,founderNote:decision==="select"?note:"",lastUpdatedAt:stamp()});
+ await audit("decision_finalized",id,r.auth.uid,{decision});
+ return {ok:true,publicId:decision==="select"?publicId:null};
+});
+exports.saveScholarPreferences=onCall(opts,async r=>{
+ requireAuth(r);
+ const id=str(r.data?.entryId,140),entry=db.collection("entries").doc(id),snap=await entry.get();
+ if(!snap.exists||snap.get("applicantUid")!==r.auth.uid||snap.get("status")!=="selected")
+  throw new HttpsError("permission-denied","Scholar record unavailable.");
+ const preference=str(r.data?.deliveryPreference,20);
+ if(!["digital","mail"].includes(preference))err("Choose digital or mail.");
+ const address=r.data?.address||{};
+ const obj={line1:str(address.line1,160),line2:str(address.line2,100),city:str(address.city,100),state:str(address.state,80),zip:str(address.zip,15)};
+ if(preference==="mail"&&(!obj.line1||!obj.city||!obj.state||!obj.zip))err("Provide your mailing address.");
+ await entry.update({recognitionName:str(r.data?.recognitionName,120)||snap.get("studentName"),deliveryPreference:preference,
+  address:preference==="mail"?obj:null,publicityConsent:bool(r.data?.publicityConsent)&&snap.get("guardianRecord")?.publicityConsent!==false,
+  scholarAccepted:true,acceptedAt:stamp(),lastUpdatedAt:stamp()});
+ await audit("scholar_accepted",id,r.auth.uid);
+ return {ok:true};
 });
