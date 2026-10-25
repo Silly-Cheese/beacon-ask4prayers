@@ -46,7 +46,7 @@ function validateEntry(req) {
     privacy,nominatorName,nominatorEmail,relationship:text(p.relationship,120),
     message:text(p.message,1500),studentContact:email(p.studentContact),
     guardianEmail:email(p.guardianEmail),minor:!!p.minor,references:refs,
-    cycle:year===2026?2026:2027 // Initial recognition cycle; managed cycles come later.
+    cycle:2027 // Initial recognition cycle; future cycles require an admin-managed setting.
   };
 }
 exports.submitEntry=onCall(options,async(req)=>{
