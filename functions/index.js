@@ -225,6 +225,8 @@ exports.setEligibility=onCall(opts,async r=>{
  const id=str(r.data?.entryId,140),eligible=r.data?.eligible===true;
  const ref=db.collection("entries").doc(id),s=await ref.get();
  if(!s.exists)throw new HttpsError("not-found","Entry not found.");
+ if(eligible&&(!Number.isFinite(s.get("gpa"))||s.get("gpa")<2.5))
+   throw new HttpsError("failed-precondition","Verify an unweighted GPA of at least 2.5 before approving eligibility.");
  if(["selected","not_selected"].includes(s.get("status")))throw new HttpsError("failed-precondition","Final decision is locked.");
  await ref.update({verifiedEligibility:eligible,eligibilityNote:str(r.data?.notes,1000),status:eligible?"under_review":"screening",lastUpdatedAt:stamp()});
  await audit("eligibility_review",id,r.auth.uid,{eligible});
