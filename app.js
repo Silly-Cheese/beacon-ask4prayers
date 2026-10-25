@@ -147,4 +147,17 @@ async function loadCommittee(){
     });
   }catch(err){root.textContent=messageError(err);}
 }
+for (const id of ["application-form", "nomination-form"]) {
+  const form = $(id);
+  if (!PUBLIC_INTAKE_OPEN) {
+    const banner = document.createElement("div");
+    banner.className = "callout";
+    banner.setAttribute("role", "status");
+    banner.textContent = "Applications and nominations are not open yet. This form is available for preview only; no information will be submitted.";
+    form.prepend(banner);
+    const submit = form.querySelector('button[type="submit"]');
+    submit.disabled = true;
+    submit.textContent = "Submissions opening soon";
+  }
+}
 route();
