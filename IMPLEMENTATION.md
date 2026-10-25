@@ -25,8 +25,8 @@ Repository: \`Silly-Cheese/beacon-ask4prayers\` • GitHub Pages: \`beacon.ask4p
 5. Keep \`BEACON_INTAKE_OPEN=false\` in Firebase Functions environment until all minor privacy, consent, mail, abuse and review workflows have been tested.
 6. Optionally install Firebase **Trigger Email** extension configured to watch the private \`mail\` collection. Set up SMTP with verified FROM address in the extension. Then set \`BEACON_EMAIL_ENABLED=true\` in Functions environment before deployment to queue invitation and decision messages. Without it, authorized admins generate private URLs for secure manual delivery; do not imply an email was sent.
 7. Use Google Cloud Application Default Credentials in a trusted environment and the server-only role script to designate one program administrator and 3–5 independent reviewers. Example in a terminal where ADC has been securely configured:
-   \`node scripts/grant-role.cjs admin@example.org admin\`
-   \`node scripts/grant-role.cjs reviewer@example.org reviewer\`
+   \`node grant-role.cjs admin@example.org admin\`
+   \`node grant-role.cjs reviewer@example.org reviewer\`
    Do not run the role script from a public website, do not commit credentials. Make sure \`firebase-admin\` is available from the current working directory (run \`npm install\` under the functions folder and run script from there with \`node ../scripts/grant-role.cjs\`).
 8. Test with fictional data and Firebase Emulator Suite before processing student information. Sign out/in after custom claims change.
 
