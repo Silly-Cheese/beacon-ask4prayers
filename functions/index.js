@@ -290,7 +290,7 @@ exports.respondInvitation=onCall(opts,async r=>{
    tx.update(ref,{status:"completed",usedAt:stamp()});
    tx.update(entryRef,{referenceStatus:"awaiting_verification",lastUpdatedAt:stamp()});
   });
- }else{
+ }else if(i.kind==="guardian"){
   if(type!=="guardian")err("Invalid response type.");
   if(!bool(response.consent)||!bool(response.isGuardian))err("Consent and guardian authority are both required.");
   await db.runTransaction(async tx=>{
@@ -303,7 +303,7 @@ exports.respondInvitation=onCall(opts,async r=>{
      lastUpdatedAt:stamp()});
    tx.update(ref,{status:"completed",usedAt:stamp()});
   });
- }
+ }else{throw new HttpsError("permission-denied","Wrong invitation type.");}
  await audit("invitation_completed",i.entryId,null,{kind:i.kind,slot:i.slot});
  return {ok:true};
 });
