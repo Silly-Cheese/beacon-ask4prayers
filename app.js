@@ -6,7 +6,7 @@ import {
 const $=id=>document.getElementById(id),qs=(s,root=document)=>root.querySelector(s),qsa=(s,root=document)=>[...root.querySelectorAll(s)];
 const call=async(name,data={})=>(await callable(name)(data)).data;
 const PAGE={home:"public-view",mission:"public-view",selection:"public-view",opportunities:"public-view",faq:"public-view",apply:"apply-view",nominate:"nominate-view",account:"account-view",dashboard:"dashboard-view",scholar:"scholar-view",committee:"committee-view",policy:"policy-view",reference:"reference-view",consent:"consent-view",claim:"claim-view"};
-let currentUser=null,settings={cycle:"2027",intakeOpen:false},step=0,draftLoadedFor=null,saveTimer=null,saving=false,inviteToken=null,activeScholarId=null,privateInvite=null;
+let currentUser=null,settings={cycle:"2027",intakeOpen:false},step=0,draftLoadedFor=null,saveTimer=null,savingPromise=null,inviteToken=null,activeScholarId=null;
 const stepNames=["Your identity","Academic journey","Service and leadership","Personal essay","Two references","Guardian information","Review and submit"];
 const numericKeys=new Set(["graduationYear","gpa"]);
 const timestamp=s=>s?new Date(s).toLocaleDateString():"";
@@ -175,16 +175,18 @@ function validateStep(){
 }
 $("student-next").addEventListener("click",async()=>{
  if(!validateStep())return;
- if(settings.intakeOpen&&accountNeeded())await saveDraft(false);
+ if(settings.intakeOpen&&accountNeeded()){try{await saveDraft(false);}catch(e){notify("Save failed: "+readable(e));return;}}
  step=Math.min(6,step+1);updateStep();window.scrollTo({top:130,behavior:"smooth"});
 });
 $("student-prev").addEventListener("click",()=>{step=Math.max(0,step-1);updateStep();window.scrollTo({top:130,behavior:"smooth"});});
 async function saveDraft(silent=true){
- if(!accountNeeded()||!settings.intakeOpen||saving)return;
- saving=true;$("draft-status").textContent="Saving…";
- try{await call("saveDraft",{fields:studentFields()});$("draft-status").textContent="Saved securely";if(!silent)notify("Draft saved to your account.");}
- catch(e){$("draft-status").textContent="Save failed";if(!silent)notify(readable(e));}
- finally{saving=false;}
+ if(!accountNeeded()||!settings.intakeOpen)return;
+ if(savingPromise)await savingPromise;
+ $("draft-status").textContent="Saving…";
+ savingPromise=call("saveDraft",{fields:studentFields()});
+ try{await savingPromise;$("draft-status").textContent="Saved securely";if(!silent)notify("Draft saved to your account.");}
+ catch(e){$("draft-status").textContent="Save failed";throw e;}
+ finally{savingPromise=null;}
 }
 student.addEventListener("input",()=>{
  countEssay();
@@ -425,6 +427,7 @@ async function openReview(entryId){
   for(const [key,label] of [["personalStatement","Essay or nomination"],["academicInterests","Academic interests"],["futureGoals","Future goals"],["service","Community service"],["activities","Leadership and activities"],["responsibilities","Responsibilities and personal growth"],["additionalInfo","Additional context"]]){
    if(d[key]){core.append(el("h3",label));core.append(el("p",d[key]));}
   }
+  if(d.duplicateCount>1){core.append(el("p","Potential duplicate entries: "+d.duplicateCount+" records share the same student name, school and graduation year. Review without assuming they are duplicates.","callout"));}
   if(d.nominator){core.append(el("h3","Confidential nominator identity — ADMIN ONLY"));core.append(infoRow("Name",d.nominator.name));core.append(infoRow("Email",d.nominator.email));}
   container.append(core);
   const refs=el("section",undefined,"review-card");refs.append(el("h2","References & consent"));
@@ -510,7 +513,7 @@ async function invitation(entryId,kind,slot){
   let panel=$("private-invite-link");if(panel)panel.remove();
   panel=el("div",undefined,"review-card");panel.id="private-invite-link";
   panel.append(el("h3","Private invitation for "+result.recipientEmail));
-  panel.append(el("p","Copy this one-time link and deliver it privately to the intended email recipient. The invitation is NOT automatically emailed; manually confirm the recipient's identity before verifying.","help"));
+  panel.append(el("p",result.queued?"An invitation email was queued through the configured Firebase mail extension. Verify delivery status before relying on it.":"Copy this one-time link and deliver it privately to the intended email recipient. Automatic email is not enabled. Verify the recipient before approving.","help"));
   const input=el("input");input.readOnly=true;input.value=result.url;input.setAttribute("aria-label","Private invitation URL");input.style.width="100%";
   panel.append(input);
   const button=el("button","Copy invitation URL","btn btn-outline");button.type="button";
