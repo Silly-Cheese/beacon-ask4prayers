@@ -246,7 +246,7 @@ exports.createInvitation=onCall(opts,async r=>{
  const ref=db.collection("entries").doc(entryId),s=await ref.get();
  if(!s.exists)throw new HttpsError("not-found","Entry not found.");
  const d=s.data();
- if(["selected","not_selected"].includes(d.status))throw new HttpsError("failed-precondition","Decision already finalized.");
+ if(kind!=="scholar"&&["selected","not_selected"].includes(d.status))throw new HttpsError("failed-precondition","Decision already finalized.");
  const recipient=kind==="guardian"?{name:d.guardianName||"Guardian",email:d.guardianEmail}:
   kind==="scholar"?{name:d.studentName,email:d.applicantEmail}:{...(d.references||[])[slot]};
  if(!recipient?.email)throw new HttpsError("failed-precondition","This entry is missing the recipient email. Ask applicant to correct it.");
