@@ -3,6 +3,8 @@ import { onAuthStateChanged, createUserWithEmailAndPassword, signInWithEmailAndP
 const $ = (id) => document.getElementById(id);
 const views = {home:"public-view",mission:"public-view",selection:"public-view",opportunities:"public-view",faq:"public-view",apply:"apply-view",nominate:"nominate-view",account:"account-view",committee:"committee-view",policy:"policy-view"};
 let activeUser = null;
+// Only change this after the backend, reference and guardian flows are operational.
+const PUBLIC_INTAKE_OPEN = false;
 let noticeTimer;
 function toast(message) {
   $("notice").textContent = message;
