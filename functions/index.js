@@ -171,6 +171,7 @@ exports.getReviewEntry=onCall(opts,async r=>{
  const d=snap.data();
  const refs=await db.collection("entries").doc(id).collection("references").get();
  const votes=await db.collection("entries").doc(id).collection("reviews").get();
+ const endorsements=await db.collection("entries").doc(id).collection("endorsements").limit(20).get();
  const recusals=await db.collection("entries").doc(id).collection("recusals").get();
  if(recusals.docs.some(x=>x.id===r.auth.uid))throw new HttpsError("permission-denied","You have recused yourself from reviewing this entry.");
  return {entry:{
@@ -189,6 +190,11 @@ exports.getReviewEntry=onCall(opts,async r=>{
    ageBand:d.ageBand||"unknown",
    verifiedEligibility:d.verifiedEligibility===true,
    endorsementCount:d.endorsementCount||0,
+   endorsements:endorsements.docs.map(v=>({
+     statement:v.get("statement"),privacy:v.get("privacy"),
+     nominator:isAdmin(r)?v.get("nominator"):null,
+     sourceEntryId:isAdmin(r)?v.get("sourceEntryId"):null
+   })),
    reviewCount:votes.size,approveVotes:votes.docs.filter(x=>x.get("recommend")==="select").length,
    myReview:votes.docs.find(x=>x.id===r.auth.uid)?.data()||null,
    recusalCount:recusals.size,
