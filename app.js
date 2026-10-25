@@ -428,6 +428,17 @@ async function showCommittee(){
   const result=await call("listReviewQueue");
   box.replaceChildren(el("h2","Selection Registry — "+settings.cycle));
   box.append(el("p","Private review queue. No student information should be exported or publicly shared.","help"));
+  const counts={total:result.entries?.length||0,nominations:0,underReview:0,selected:0};
+  for(const entry of result.entries||[]){
+   if(entry.type==="nomination")counts.nominations++;
+   if(entry.status==="under_review")counts.underReview++;
+   if(entry.status==="selected")counts.selected++;
+  }
+  const stats=el("div",undefined,"portal-grid");
+  for(const [label,count] of [["Entries in recent queue",counts.total],["Nominations",counts.nominations],["Under review",counts.underReview],["Selected",counts.selected]]){
+   const tile=el("div",undefined,"portal-tile");tile.append(el("h3",String(count)));tile.append(el("p",label));stats.append(tile);
+  }
+  box.append(stats);
   if(!result.entries?.length)box.append(el("p","No entries have been submitted."));
   for(const item of result.entries||[]){
    const line=el("article",undefined,"entry-row");
