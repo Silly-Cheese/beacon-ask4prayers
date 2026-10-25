@@ -1,0 +1,8 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    // Document uploads are disabled until a server-mediated upload workflow
+    // with validation, virus scanning and private access has been implemented.
+    match /{allPaths=**} { allow read, write: if false; }
+  }
+}

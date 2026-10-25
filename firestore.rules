@@ -1,0 +1,14 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Student data, references and consent records are handled by privileged
+    // Cloud Functions. Never allow direct browser access to these documents.
+    match /entries/{id} { allow read, write: if false; }
+    match /selfSubmissionKeys/{id} { allow read, write: if false; }
+    match /submissionQuotas/{id} { allow read, write: if false; }
+    match /references/{document=**} { allow read, write: if false; }
+    match /guardianConsents/{document=**} { allow read, write: if false; }
+    match /auditLogs/{document=**} { allow read, write: if false; }
+    match /{document=**} { allow read, write: if false; }
+  }
+}
