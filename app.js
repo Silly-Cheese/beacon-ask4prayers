@@ -5,7 +5,7 @@ import {
 } from "https://www.gstatic.com/firebasejs/13.1.0/firebase-auth.js";
 const $=id=>document.getElementById(id),qs=(s,root=document)=>root.querySelector(s),qsa=(s,root=document)=>[...root.querySelectorAll(s)];
 const call=async(name,data={})=>(await callable(name)(data)).data;
-const PAGE={home:"public-view",mission:"public-view",selection:"public-view",opportunities:"public-view",faq:"public-view",apply:"apply-view",nominate:"nominate-view",account:"account-view",dashboard:"dashboard-view",scholar:"scholar-view",committee:"committee-view",policy:"policy-view",reference:"reference-view",consent:"consent-view",claim:"claim-view"};
+const PAGE={home:"public-view",mission:"public-view",selection:"public-view",opportunities:"public-view",faq:"public-view",apply:"apply-view",nominate:"nominate-view",account:"account-view",dashboard:"dashboard-view",scholar:"scholar-view",committee:"committee-view",policy:"policy-view",reference:"reference-view",consent:"consent-view",claim:"claim-view",verify:"verify-view"};
 let currentUser=null,settings={cycle:"2027",intakeOpen:false},step=0,draftLoadedFor=null,saveTimer=null,savingPromise=null,inviteToken=null,activeScholarId=null;
 const stepNames=["Your identity","Academic journey","Service and leadership","Personal essay","Two references","Guardian information","Review and submit"];
 const numericKeys=new Set(["graduationYear","gpa"]);
@@ -51,6 +51,7 @@ function route(){
  if(page==="scholar")showScholar();
  if(page==="reference"||page==="consent")loadInvitation(page);
  if(page==="claim")loadClaim();
+ if(page==="verify"&&parts.length){const input=qs('input[name="publicId"]',$("verify-form"));input.value=parts[0];checkScholarId(parts[0]);}
 }
 $("menu-toggle").addEventListener("click",()=>{
  const open=$("main-nav").classList.toggle("open");$("menu-toggle").setAttribute("aria-expanded",String(open));
@@ -289,7 +290,7 @@ function showEntryDetails(root,d){
 }
 
 function infoRow(label,value){const p=el("p");const b=el("strong",label+": ");p.append(b,document.createTextNode(String(value||"—")));return p;}
-function showScholarDocument(target,title,letter){
+function showScholarDocument(target){
  const root=$("scholar-content");
  qsa(".paper-document",root).forEach(n=>n.classList.remove("print-target"));
  const node=qs("#"+target,root);node?.classList.add("print-target");
@@ -317,6 +318,26 @@ async function showScholar(){
    try{await call("saveScholarPreferences",{entryId:activeScholarId,recognitionName:d.get("recognitionName"),deliveryPreference:d.get("deliveryPreference"),address:{line1:d.get("line1"),line2:d.get("line2"),city:d.get("city"),state:d.get("state"),zip:d.get("zip")},publicityConsent:d.has("publicityConsent")});notify("Scholar preferences saved securely.");}catch(err){notify(readable(err));}
   });
   root.append(form);
+  root.append(el("h3","Milestones & achievements"));
+  root.append(el("p","Record meaningful service, academic accomplishments, leadership experiences or personal growth. These milestones remain private until explicitly reviewed and approved.","muted"));
+  const milestones=el("div",undefined,"portal-grid");
+  for(const item of record.milestones||[]){
+   const card=el("article",undefined,"portal-tile");
+   card.append(el("h3",item.title));card.append(el("p",item.details));
+   card.append(el("span",item.date+" • "+(item.verified?"Verified milestone":"Personal milestone"),"help"));
+   milestones.append(card);
+  }
+  if(!(record.milestones||[]).length)milestones.append(el("p","No milestones recorded yet.","muted"));
+  root.append(milestones);
+  const milestoneForm=el("form",undefined,"entry-form");
+  milestoneForm.innerHTML='<h3>Add a private milestone</h3><label>Milestone title <input name="title" minlength="5" maxlength="140" required></label><label>Date <input type="date" name="date" required></label><label>What happened and why does it matter? <textarea name="details" rows="4" minlength="10" maxlength="800" required></textarea></label><button class="btn btn-outline" type="submit">Save milestone</button>';
+  milestoneForm.addEventListener("submit",async e=>{
+   e.preventDefault();const d=new FormData(milestoneForm);
+   try{await call("addMilestone",{entryId:activeScholarId,title:d.get("title"),date:d.get("date"),details:d.get("details")});notify("Milestone saved.");showScholar();}
+   catch(err){notify(readable(err));}
+  });
+  root.append(milestoneForm);
+  const verifyLink=el("a","Verify this Scholar ID →","text-link");verifyLink.href="#verify/"+encodeURIComponent(record.publicId);root.append(verifyLink);
   const toolbar=el("div",undefined,"portal-actions");
   const printLetter=el("button","Print official letter","btn btn-gold"),printCert=el("button","Print certificate","btn btn-outline");
   printLetter.onclick=()=>showScholarDocument("official-letter");printCert.onclick=()=>showScholarDocument("official-certificate");
@@ -522,4 +543,22 @@ async function invitation(entryId,kind,slot){
   panel.scrollIntoView({behavior:"smooth",block:"start"});
  }catch(e){notify(readable(e));}
 }
+
+async function checkScholarId(id){
+ const result=$("verification-result");result.textContent="Checking recognition…";
+ try{
+  const data=await call("verifyScholar",{publicId:id});
+  result.replaceChildren();
+  if(!data.valid){result.append(el("p","No approved Scholar record matched that identification number.","danger-text"));return;}
+  result.append(el("h3","Verified Beacon Scholar ✓"));
+  result.append(infoRow("Recognition class",data.classYear));
+  result.append(infoRow("Program",data.program));
+  result.append(el("p",data.name?"Scholar: "+data.name:"This Scholar's personal details are private."));
+ }catch(e){result.textContent=readable(e);}
+}
+$("verify-form").addEventListener("submit",e=>{
+ e.preventDefault();const id=String(new FormData(e.currentTarget).get("publicId")||"").trim();
+ checkScholarId(id);
+});
+
 init();
