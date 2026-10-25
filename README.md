@@ -1,27 +1,34 @@
 # Beacon Scholars
 
-An initiative of **The Prayer Project** at **beacon.ask4prayers.com**.
+**Beacon Scholars**, an initiative of [The Prayer Project](https://ask4prayers.com/).
 
-## Architecture
-- Frontend: Static HTML/CSS/JavaScript on **GitHub Pages** (not Firebase Hosting).
-- Backend: Firebase project `beacon-ask4prayers` (Authentication, Firestore, Cloud Functions and optional Cloud Storage).
-- Deployment: GitHub Pages from `main` / root. Set the custom domain to `beacon.ask4prayers.com`, with DNS CNAME pointing to `silly-cheese.github.io`.
+- Main website: https://beacon.ask4prayers.com
+- Public website hosting: **GitHub Pages** (main branch, root directory)
+- Secure backend: Firebase Auth, Firestore, Cloud Functions, optional Firebase Trigger Email extension
+- Firebase project: \`beacon-ask4prayers\`
+- Look and feel: The Prayer Project's black-and-warm-beige palette
 
-## Program principles
-- Student self-applications and student nominations are equally valid official entries.
-- Nominations can be named, confidential, or fully anonymous.
-- Two qualifying references and verified parent/guardian consent for minors are required **before final recognition**, not before an entry is accepted.
-- No monetary award is currently promised.
-- Keep sensitive student data out of GitHub and public-facing pages.
+## Current functionality
+- Required email/password account registration before student applications.
+- Seven-section student wizard with secure autosave to Firestore and resume from dashboard.
+- Named, confidential and fully anonymous official nominations. A nomination counts as a complete entry; no separate student application required.
+- Two references, guardian information, individualized invitation links, response forms and controlled administrative verification.
+- Nominated student can claim an existing nomination with a verified-email invitation.
+- Restricted Selection Committee: candidate file, private reviews, 100-point rubric, 3–5 reviewers, recusals, documented eligibility and decisions.
+- Scholar Passport: selected Scholar ID, printable official letter and certificate, founder personal note, delivery preference and private achievements.
+- Public Scholar ID verification without disclosing non-consenting students' names.
+- Optional outbound email via Firebase Trigger Email extension (SMTP configuration required).
+- Responsive main-site-matched design and GitHub Actions syntax validation.
 
-## Launch checklist
-1. Review program policies, nomination protections, and student safeguarding before opening submissions.
-2. Enable Firebase Authentication Email/Password and Anonymous sign-in, configure Firestore and Cloud Functions.
-3. Configure Firebase Authentication authorized domains for `beacon.ask4prayers.com` and `silly-cheese.github.io`.
-4. Deploy `firestore.rules` and Functions using the Firebase CLI (hosting is intentionally not configured).
-5. Configure a CAPTCHA/App Check solution, monitor abuse, and integrate verified email delivery for consent/reference invitations.
-6. Set GitHub repository Settings → Pages → Deploy from a branch: `main` / `/(root)`; add custom domain.
-7. At the DNS provider: CNAME `beacon` → `silly-cheese.github.io`. Turn on Enforce HTTPS when ready.
-8. Confirm the application is safe and tested before enabling public intake.
+## Safe operational state
+**PUBLIC INTAKE REMAINS CLOSED BY DEFAULT.** The admin must deploy backend changes, configure App Check and authorized accounts, finalize program policies, and validate student/guardian/reference workflows before enabling it. GitHub publication does not open forms by itself.
 
-**Security:** Firebase web configuration is public; **never** put service account keys or email provider secrets in this repository. Firestore rules intentionally deny all direct client access to confidential application collections.
+The program starts as **honorary recognition only**. Bibles Within Reach comes first; any eventual $500–$10,000-funded awards are speculative and must never be represented as already available or guaranteed. Letters and certificates do not promise funding. Donors do not select recipients.
+
+## Setup and verification
+See [IMPLEMENTATION.md](IMPLEMENTATION.md) for the latest operational checklist, hosting instructions, emails, custom claim roles, consent safeguards and known readiness limitations.
+
+## Security notes
+Student data is restricted to privileged server-side Cloud Functions. Firestore and Storage rules deny browser direct access to private collections. Functions use Firebase App Check and Firebase Authentication where required. Do not commit service-account keys, secret provider credentials, unredacted student applications or API secrets.
+
+The Firebase web config is designed to be public. The reCAPTCHA Enterprise site key is also public, **but must be inserted into \`firebase.js\` after the app is registered**. Never use a secret/reCAPTCHA server key in frontend source.
