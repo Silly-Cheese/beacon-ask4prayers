@@ -469,6 +469,13 @@ async function openReview(entryId){
    if(d[key]){core.append(el("h3",label));core.append(el("p",d[key]));}
   }
   if(d.duplicateCount>1){core.append(el("p","Potential duplicate entries: "+d.duplicateCount+" records share the same student name, school and graduation year. Review without assuming they are duplicates.","callout"));}
+  if((d.endorsements||[]).length){
+   core.append(el("h3","Supporting nominations ("+d.endorsements.length+")"));
+   for(const endorsement of d.endorsements){
+    core.append(el("p",endorsement.statement));
+    if(endorsement.nominator?.name)core.append(el("p","Confidential nominator (admin): "+endorsement.nominator.name,"help"));
+   }
+  }
   if(d.nominator){core.append(el("h3","Confidential nominator identity — ADMIN ONLY"));core.append(infoRow("Name",d.nominator.name));core.append(infoRow("Email",d.nominator.email));}
   container.append(core);
   const refs=el("section",undefined,"review-card");refs.append(el("h2","References & consent"));
@@ -514,6 +521,20 @@ async function openReview(entryId){
    }},entryId);
   });
   manage.append(dataForm);
+  if(d.type==="nomination"){
+   const mergeBox=el("div",undefined,"review-actions");
+   const destLabel=el("label","Merge this nomination into another entry (destination application ID)");
+   const dest=el("input");dest.placeholder="Destination entry ID";dest.maxLength=140;
+   destLabel.append(dest);mergeBox.append(destLabel);
+   const merge=el("button","Merge as supporting endorsement","btn btn-outline");merge.type="button";
+   merge.onclick=async()=>{
+    if(!dest.value.trim())return notify("Enter the destination entry ID.");
+    if(!confirm("Merge this nomination into "+dest.value.trim()+"? Confirm the student records truly represent the same person."))return;
+    try{await call("mergeNomination",{sourceEntryId:entryId,destinationEntryId:dest.value.trim()});notify("Nomination linked as an endorsement. The original entry remains in the audit trail.");showCommittee();}
+    catch(e){notify(readable(e));}
+   };
+   mergeBox.append(merge);manage.append(mergeBox);
+  }
   const claimBtn=el("button","Generate student account-claim invitation","btn btn-outline");
   claimBtn.type="button";claimBtn.onclick=()=>invitation(entryId,"scholar",null);manage.append(claimBtn);
   if(d.type==="nomination"&&d.nominator?.email){
