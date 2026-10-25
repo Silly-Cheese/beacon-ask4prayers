@@ -384,14 +384,34 @@ exports.updateEntryContacts=onCall(opts,async r=>{
  const id=str(r.data?.entryId,140),ref=db.collection("entries").doc(id),snap=await ref.get();
  if(!snap.exists)throw new HttpsError("not-found","Entry not found.");
  if(["selected","not_selected"].includes(snap.get("status")))throw new HttpsError("failed-precondition","Entry finalized.");
- const fields=r.data?.fields||{},changes={lastUpdatedAt:stamp()};
+ const original=snap.data(),fields=r.data?.fields||{},changes={lastUpdatedAt:stamp()};
  if("guardianEmail" in fields)changes.guardianEmail=mail(fields.guardianEmail);
  if("guardianName" in fields)changes.guardianName=str(fields.guardianName,120);
  if("applicantEmail" in fields)changes.applicantEmail=mail(fields.applicantEmail);
  if("ageBand" in fields){if(!["minor","adult"].includes(fields.ageBand))err("Invalid age band.");changes.ageBand=fields.ageBand;}
  if("gpa" in fields){const n=fields.gpa===""?null:Number(fields.gpa);if(n!==null&&(!Number.isFinite(n)||n<0||n>4))err("GPA outside valid range.");changes.gpa=n;}
  if("references" in fields)changes.references=references(fields.references);
+ const guardianChanged="guardianEmail" in changes&&changes.guardianEmail!==original.guardianEmail;
+ const refsChanged="references" in changes&&JSON.stringify(changes.references)!==JSON.stringify(original.references||[]);
+ const applicantChanged="applicantEmail" in changes&&changes.applicantEmail!==original.applicantEmail;
+ if(guardianChanged){changes.guardianStatus="pending";changes.guardianRecord=admin.firestore.FieldValue.delete();}
+ if(refsChanged){changes.referenceCount=0;changes.referenceStatus="pending";}
+ if("gpa" in changes&&changes.gpa!==original.gpa)changes.verifiedEligibility=false;
+ if("ageBand" in changes&&changes.ageBand!==original.ageBand)changes.verifiedEligibility=false;
  await ref.update(changes);
+ if(refsChanged){
+   const old=await ref.collection("references").get();
+   await Promise.all(old.docs.map(x=>x.ref.delete()));
+ }
+ if(guardianChanged||refsChanged||applicantChanged){
+  const oldInvites=await db.collection("invitations").where("entryId","==",id).limit(100).get();
+  const revokes=oldInvites.docs.filter(x=>x.get("status")==="pending"&&(
+   (guardianChanged&&x.get("kind")==="guardian")||
+   (refsChanged&&x.get("kind")==="reference")||
+   (applicantChanged&&x.get("kind")==="scholar")
+  ));
+  await Promise.all(revokes.map(x=>x.ref.update({status:"revoked",revokedAt:stamp()})));
+ }
  await audit("admin_contact_update",id,r.auth.uid,{fields:Object.keys(changes).filter(k=>k!=="lastUpdatedAt")});
  return {ok:true};
 });
