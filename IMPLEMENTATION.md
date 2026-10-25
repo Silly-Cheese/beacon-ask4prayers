@@ -18,7 +18,7 @@ Repository: \`Silly-Cheese/beacon-ask4prayers\` • GitHub Pages: \`beacon.ask4p
 ## Deployment, first steps
 1. Verify GitHub Pages uses main/root and HTTPS for beacon.ask4prayers.com.
 2. Configure Firebase Authentication: Email/Password and Anonymous providers; authorize beacon.ask4prayers.com.
-3. Register reCAPTCHA Enterprise **score-based** web key in Firebase App Check. The site key must also be copied to \`firebase.js\` in \`APP_CHECK_SITE_KEY\`. Registering it in the Firebase console *alone* does not automatically place it in this GitHub file. Never place a secret API key/service account into source code.
+3. Register reCAPTCHA Enterprise **score-based** web key in Firebase App Check. The public site key is now stored as a quoted string in \`firebase.js\` under \`APP_CHECK_SITE_KEY\`. Confirm it matches the Firebase App Check registration; the console does not update this file automatically. Never place a secret API key/service account into source code.
 4. Run \`npm install\` in \`functions\` and deploy using the Firebase CLI from repo root:
    \`firebase deploy --project beacon-ask4prayers --only firestore:rules,storage,functions\`.
    **Do not deploy Firebase Hosting.**
