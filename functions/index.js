@@ -479,3 +479,32 @@ exports.withdrawApplication=onCall(opts,async r=>{
  await audit("application_withdrawn",id,r.auth.uid);
  return {ok:true};
 });
+
+exports.revokeGuardianConsent=onCall(opts,async r=>{
+ owner(r);
+ const entryId=str(r.data?.entryId,140),reason=str(r.data?.reason,600);
+ if(reason.length<8)err("Provide a documented reason for guardian consent withdrawal.");
+ const ref=db.collection("entries").doc(entryId),snap=await ref.get();
+ if(!snap.exists)throw new HttpsError("not-found","Entry not found.");
+ if(snap.get("status")==="selected")throw new HttpsError("failed-precondition","Recognition was already finalized; initiate a formal privacy review instead.");
+ await ref.update({guardianStatus:"withdrawn",lastUpdatedAt:stamp(),
+   "guardianRecord.verified":false,consentWithdrawal:{reason,recordedBy:r.auth.uid,at:new Date().toISOString()}});
+ await audit("guardian_consent_withdrawn",entryId,r.auth.uid,{reason});
+ return {ok:true};
+});
+exports.invalidateReference=onCall(opts,async r=>{
+ owner(r);
+ const entryId=str(r.data?.entryId,140),slot=Number(r.data?.slot),reason=str(r.data?.reason,600);
+ if(![0,1].includes(slot)||reason.length<8)err("Choose reference 1 or 2 and explain the problem.");
+ const ref=db.collection("entries").doc(entryId),snap=await ref.get();
+ if(!snap.exists)throw new HttpsError("not-found","Entry not found.");
+ if(snap.get("status")==="selected")throw new HttpsError("failed-precondition","Recognition finalized; initiate formal review.");
+ const doc=ref.collection("references").doc(String(slot)),d=await doc.get();
+ if(!d.exists)throw new HttpsError("not-found","Reference does not exist.");
+ await doc.update({verified:false,invalidReason:reason,invalidatedBy:r.auth.uid,invalidatedAt:stamp()});
+ const other=await ref.collection("references").get();
+ const count=other.docs.filter(x=>x.id!==String(slot)&&x.get("verified")===true).length;
+ await ref.update({referenceCount:count,referenceStatus:count>=2?"verified":"pending",lastUpdatedAt:stamp()});
+ await audit("reference_invalidated",entryId,r.auth.uid,{slot,reason});
+ return {ok:true};
+});
