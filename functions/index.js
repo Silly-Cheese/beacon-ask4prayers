@@ -73,9 +73,12 @@ exports.saveDraft=onCall(opts,async r=>{
 exports.submitEntry=onCall(opts,async r=>{
  gate();
  const type=str(r.data?.type,24);
+ if(type==="nomination"&&!bool(r.data?.declaration))err("A nomination authenticity declaration is required.");
  if(type==="self"){
   requireAuth(r);
   if(r.auth.token.email_verified!==true)throw new HttpsError("failed-precondition","Verify your account email before final submission.");
+  if(!bool(r.data?.declarations?.truthful)||!bool(r.data?.declarations?.requirements))
+   throw new HttpsError("failed-precondition","Both application declarations must be acknowledged.");
   const draft=await db.collection("drafts").doc(r.auth.uid+"_"+cycle).get();
   if(!draft.exists)err("Save your application first.");
   const d=draft.data().fields;validateFinal(d);
@@ -88,7 +91,7 @@ exports.submitEntry=onCall(opts,async r=>{
     tx.create(entry,{
       ...d,applicantEmail:r.auth.token.email?.toLowerCase()||"",type:"self",entryId:entry.id,cycle,status:"submitted",applicantUid:r.auth.uid,
       submitterUid:r.auth.uid,submittedAt:stamp(),createdAt:stamp(),lastUpdatedAt:stamp(),
-      publicId:null,guardianStatus:d.ageBand==="adult"?"not_required":"pending",
+      publicId:null,studentDeclaration:{truthful:true,requirements:true,recordedAt:new Date().toISOString(),version:"2027-v1"},guardianStatus:d.ageBand==="adult"?"not_required":"pending",
       referenceStatus:"pending",referenceCount:0,selectionReady:false,decision:null,
       duplicateKey:dedupe(d)
     });
@@ -127,6 +130,7 @@ exports.submitEntry=onCall(opts,async r=>{
    cycle,status:"submitted",entryId:doc.id,
    submitterUid:privacy==="anonymous"?null:r.auth.uid,applicantUid:null,
    submittedAt:stamp(),createdAt:stamp(),lastUpdatedAt:stamp(),publicId:null,
+   nominatorDeclaration:{truthful:true,recordedAt:new Date().toISOString(),version:"2027-v1"},
    guardianStatus:"pending",referenceStatus:"pending",referenceCount:0,selectionReady:false,
    decision:null,duplicateKey:dedupe(d)
   });
