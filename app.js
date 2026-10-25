@@ -466,12 +466,26 @@ async function openReview(entryId){
    refs.append(el("h3","Reference "+(Number(r.slot)+1)+" — "+(r.verified?"Verified":"Awaiting verification")));
    refs.append(infoRow("Full name",r.fullName));
    for(let i=0;i<(r.answers||[]).length;i++){refs.append(el("p",prompts[i],"help"));refs.append(el("p",r.answers[i]));}
-   if(!r.verified){const button=el("button","Confirm reference identity and verify","btn btn-outline");button.type="button";button.onclick=()=>action("verifyRequirement",{entryId,kind:"reference",slot:Number(r.slot)},entryId);refs.append(button);}
+   if(!r.verified){
+    const button=el("button","Confirm reference identity and verify","btn btn-outline");
+    button.type="button";button.onclick=()=>action("verifyRequirement",{entryId,kind:"reference",slot:Number(r.slot)},entryId);refs.append(button);
+   }else{
+    const reason=el("textarea");reason.rows=2;reason.maxLength=600;reason.placeholder="Required reason to invalidate this verified reference";
+    refs.append(reason);
+    const revoke=el("button","Invalidate reference "+(Number(r.slot)+1),"btn btn-outline");
+    revoke.type="button";revoke.onclick=()=>action("invalidateReference",{entryId,slot:Number(r.slot),reason:reason.value},entryId);refs.append(revoke);
+   }
   }
   const tools=el("div",undefined,"review-actions");
   for(let j=0;j<2;j++){const btn=el("button","Create reference "+(j+1)+" invitation","btn btn-outline");btn.type="button";btn.onclick=()=>invitation(entryId,"reference",j);tools.append(btn);}
   const guardian=el("button","Create guardian consent invitation","btn btn-outline");guardian.type="button";guardian.onclick=()=>invitation(entryId,"guardian",null);tools.append(guardian);
   if(d.guardianStatus==="signed_pending_verification"){const verify=el("button","Verify guardian authorization","btn btn-outline");verify.type="button";verify.onclick=()=>action("verifyRequirement",{entryId,kind:"guardian"},entryId);tools.append(verify);}
+  if(d.guardianStatus==="verified"||d.guardianStatus==="signed_pending_verification"){
+   const reason=el("textarea");reason.rows=2;reason.maxLength=600;reason.placeholder="Required reason if guardian permission is withdrawn";
+   refs.append(reason);
+   const revoke=el("button","Record guardian consent withdrawal","btn btn-outline");revoke.type="button";
+   revoke.onclick=()=>action("revokeGuardianConsent",{entryId,reason:reason.value},entryId);tools.append(revoke);
+  }
   refs.append(tools);container.append(refs);
   const manage=el("section",undefined,"review-card");
   manage.append(el("h2","Administrator: student details and invitations"));
