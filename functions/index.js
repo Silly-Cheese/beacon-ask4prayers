@@ -6,6 +6,7 @@ const crypto=require("node:crypto");
 admin.initializeApp();
 const db=admin.firestore();
 const open=defineString("BEACON_INTAKE_OPEN",{default:"false"});
+const mailEnabled=defineString("BEACON_EMAIL_ENABLED",{default:"false"});
 const cycle="2027";
 const origin="https://beacon.ask4prayers.com";
 const opts={region:"us-central1",cors:[origin,"https://silly-cheese.github.io"],maxInstances:10,memory:"256MiB",enforceAppCheck:true};
@@ -85,7 +86,7 @@ exports.submitEntry=onCall(opts,async r=>{
     if(prior.exists)throw new HttpsError("already-exists","You have already submitted an entry this cycle.");
     tx.create(key,{entryId:entry.id,createdAt:stamp()});
     tx.create(entry,{
-      ...d,type:"self",entryId:entry.id,cycle,status:"submitted",applicantUid:r.auth.uid,
+      ...d,applicantEmail:r.auth.token.email?.toLowerCase()||"",type:"self",entryId:entry.id,cycle,status:"submitted",applicantUid:r.auth.uid,
       submitterUid:r.auth.uid,submittedAt:stamp(),createdAt:stamp(),lastUpdatedAt:stamp(),
       publicId:null,guardianStatus:d.ageBand==="adult"?"not_required":"pending",
       referenceStatus:"pending",referenceCount:0,selectionReady:false,decision:null,
@@ -173,6 +174,7 @@ exports.getReviewEntry=onCall(opts,async r=>{
    honors:d.honors,additionalInfo:d.additionalInfo,guardianStatus:d.guardianStatus,
    referenceStatus:d.referenceStatus,referenceCount:d.referenceCount||0,
    referenceSuggestions:d.references||[],
+   duplicateCount:(await db.collection("entries").where("duplicateKey","==",d.duplicateKey).limit(10).get()).size,
    nominator:isAdmin(r)&&d.privacy!=="anonymous"?d.nominator:null,
    duplicateKey:d.duplicateKey,verifiedEligibility:d.verifiedEligibility===true,
    references:refs.docs.map(x=>({id:x.id,...x.data()})),
@@ -208,6 +210,9 @@ exports.recordReview=onCall(opts,async r=>{
  for(const [k,m] of Object.entries(max)){const n=Number(scores[k]);if(!Number.isInteger(n)||n<0||n>m)err("Invalid score: "+k);out[k]=n;}
  const recommend=str(r.data?.recommend,20);
  if(!["select","decline","discuss"].includes(recommend))err("Select a recommendation.");
+ const existingReviews=await ref.collection("reviews").get();
+ if(existingReviews.size>=5&&!existingReviews.docs.some(x=>x.id===r.auth.uid))
+  throw new HttpsError("failed-precondition","The committee already has five reviews.");
  await ref.collection("reviews").doc(r.auth.uid).set({
   uid:r.auth.uid,scores:out,total:Object.values(out).reduce((a,b)=>a+b,0),
   recommend,notes:str(r.data?.notes,2400),submittedAt:stamp()
@@ -240,8 +245,23 @@ exports.createInvitation=onCall(opts,async r=>{
  const token=SECRET(),invite=db.collection("invitations").doc(hash(token)),expires=Date.now()+14*86400000;
  await invite.set({entryId,kind,slot:kind==="reference"?slot:null,recipientName:recipient.name||"",recipientEmail:recipient.email,status:"pending",createdBy:r.auth.uid,createdAt:stamp(),expiresAt:admin.firestore.Timestamp.fromMillis(expires),usedAt:null});
  await audit("invitation_created",entryId,r.auth.uid,{kind,slot});
- // Only an admin receives this private URL. Send to the verified intended recipient via a secure channel.
- return {url:origin+"/#"+(kind==="guardian"?"consent/":kind==="scholar"?"claim/":"reference/")+token,recipientEmail:recipient.email,expiresAt:new Date(expires).toISOString()};
+ const url=origin+"/#"+(kind==="guardian"?"consent/":kind==="scholar"?"claim/":"reference/")+token;
+ let queued=false;
+ if(mailEnabled.value()==="true"){
+   // The official Firebase Trigger Email extension must be configured for 'mail'
+   // with a valid SMTP provider. No public client may write to this collection.
+   await db.collection("mail").add({
+     to:[recipient.email],createdAt:stamp(),
+     message:{subject:kind==="guardian"?"Beacon Scholars: Parent/guardian authorization":
+       kind==="scholar"?"Beacon Scholars: Connect your account":"Beacon Scholars: Confidential reference request",
+       text:"Hello "+recipient.name+",\n\nThe Beacon Scholars team invites you to complete a private "+kind+
+       " form. Open the secure one-time link:\n"+url+
+       "\n\nThis link expires in 14 days. Do not forward it. Contact The Prayer Project if you did not expect this invitation.\n\nBeacon Scholars • The Prayer Project"}
+   });
+   queued=true;
+ }
+ // An admin may copy the URL for secure manual delivery when automatic mail is disabled.
+ return {url,recipientEmail:recipient.email,expiresAt:new Date(expires).toISOString(),queued};
 });
 exports.getInvitation=onCall(opts,async r=>{
  const token=str(r.data?.token,150),s=await db.collection("invitations").doc(hash(token)).get();
@@ -324,6 +344,14 @@ exports.finalizeDecision=onCall(opts,async r=>{
  await entry.update({status:decision==="select"?"selected":"not_selected",decision,selectedAt:decision==="select"?stamp():null,
   publicId:decision==="select"?publicId:null,founderNote:decision==="select"?note:"",lastUpdatedAt:stamp()});
  await audit("decision_finalized",id,r.auth.uid,{decision});
+ if(mailEnabled.value()==="true"&&d.applicantEmail){
+  await db.collection("mail").add({to:[d.applicantEmail],createdAt:stamp(),message:{
+   subject:decision==="select"?"Beacon Scholars: Recognition Decision":"Beacon Scholars: Application Decision",
+   text:decision==="select"?
+     "Congratulations. You have been selected as a Beacon Scholar. Sign in at "+origin+" to review your recognition. Recognition is honorary, with no financial award promised.":
+     "Thank you for your Beacon Scholars submission. Following committee review, your entry was not selected this cycle. We appreciate your story and your willingness to be considered."
+  }});
+ }
  return {ok:true,publicId:decision==="select"?publicId:null};
 });
 exports.saveScholarPreferences=onCall(opts,async r=>{
