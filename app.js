@@ -207,7 +207,8 @@ student.addEventListener("submit",async e=>{
   if(!auth.currentUser.emailVerified)throw Error("Verify your email before submitting.");
   if(!validateStep())return;
   await saveDraft(true);
-  const result=await call("submitEntry",{type:"self"});
+  if(!$("student-truth").checked||!$("student-ack").checked)throw Error("Please acknowledge both declarations.");
+  const result=await call("submitEntry",{type:"self",declarations:{truthful:true,requirements:true}});
   notify("Official application submitted: "+result.entryId);
   location.hash="#dashboard";
  }catch(e){notify(readable(e));}
@@ -241,7 +242,7 @@ nomForm.addEventListener("submit",async e=>{
    references:[{name:get("ref1Name"),email:get("ref1Email")},{name:get("ref2Name"),email:get("ref2Email")}]
   };
   const out=await call("submitEntry",{
-   type:"nomination",privacy,fields,nominatorName:get("nominatorName"),
+   type:"nomination",privacy,fields,declaration:get("declaration")==="on",nominatorName:get("nominatorName"),
    nominatorEmail:get("nominatorEmail"),relationship:get("relationship"),message:get("message")
   });
   notify("Official nomination recorded. Entry ID: "+out.entryId);
