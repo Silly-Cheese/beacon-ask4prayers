@@ -144,7 +144,9 @@ exports.getMyEntry=onCall(opts,async r=>{
  const id=str(r.data?.entryId,140),doc=await db.collection("entries").doc(id).get();
  if(!doc.exists||doc.get("applicantUid")!==r.auth.uid)throw new HttpsError("permission-denied","Entry unavailable.");
  const d=doc.data();
+ const milestoneSnap=await doc.ref.collection("milestones").orderBy("createdAt","desc").limit(30).get();
  return {entry:{
+   milestones:milestoneSnap.docs.map(m=>({id:m.id,title:m.get("title"),details:m.get("details"),date:m.get("date"),verified:m.get("verified")===true})),
    ...safeSummary(d,doc.id),preferredName:d.preferredName||"",
    school:d.school,submittedAt:d.submittedAt?.toDate?.()?.toISOString?.()||null,
    guardianStatus:d.guardianStatus,referenceStatus:d.referenceStatus,
@@ -367,7 +369,7 @@ exports.saveScholarPreferences=onCall(opts,async r=>{
  const obj={line1:str(address.line1,160),line2:str(address.line2,100),city:str(address.city,100),state:str(address.state,80),zip:str(address.zip,15)};
  if(preference==="mail"&&(!obj.line1||!obj.city||!obj.state||!obj.zip))err("Provide your mailing address.");
  await entry.update({recognitionName:str(r.data?.recognitionName,120)||snap.get("studentName"),deliveryPreference:preference,
-  address:preference==="mail"?obj:null,publicityConsent:bool(r.data?.publicityConsent)&&snap.get("guardianRecord")?.publicityConsent!==false,
+  address:preference==="mail"?obj:null,publicityConsent:bool(r.data?.publicityConsent)&&(snap.get("ageBand")==="adult"||snap.get("guardianRecord")?.publicityConsent===true),
   scholarAccepted:true,acceptedAt:stamp(),lastUpdatedAt:stamp()});
  await audit("scholar_accepted",id,r.auth.uid);
  return {ok:true};
@@ -429,4 +431,47 @@ exports.claimNomination=onCall(opts,async r=>{
  });
  await audit("nominee_claimed",s.get("entryId"),r.auth.uid);
  return {ok:true,entryId:s.get("entryId")};
+});
+
+exports.verifyScholar=onCall(opts,async r=>{
+ const id=str(r.data?.publicId,50).toUpperCase();
+ if(!/^BCN-\d{4}-[A-Z0-9]{8}$/.test(id))return {valid:false};
+ const q=await db.collection("entries").where("publicId","==",id).limit(1).get();
+ if(q.empty||q.docs[0].get("status")!=="selected")return {valid:false};
+ const d=q.docs[0].data();
+ return {valid:true,classYear:d.cycle,program:"Beacon Scholars • The Prayer Project",
+   name:d.scholarAccepted===true&&d.publicityConsent===true?(d.recognitionName||d.studentName):null,
+   privateRecord:d.publicityConsent!==true};
+});
+exports.addMilestone=onCall(opts,async r=>{
+ requireAuth(r);
+ const entryId=str(r.data?.entryId,140),entry=db.collection("entries").doc(entryId),snap=await entry.get();
+ if(!snap.exists||snap.get("applicantUid")!==r.auth.uid||snap.get("status")!=="selected")
+  throw new HttpsError("permission-denied","Scholar account required.");
+ const title=str(r.data?.title,140),details=str(r.data?.details,800),date=str(r.data?.date,10);
+ if(title.length<5||details.length<10||!/^\d{4}-\d{2}-\d{2}$/.test(date))err("Add a title, description and valid date.");
+ const q=await entry.collection("milestones").limit(51).get();
+ if(q.size>=50)throw new HttpsError("resource-exhausted","Milestone limit reached.");
+ const m=await entry.collection("milestones").add({title,details,date,verified:false,createdAt:stamp(),creatorUid:r.auth.uid});
+ await audit("scholar_milestone_created",entryId,r.auth.uid,{milestoneId:m.id});
+ return {ok:true};
+});
+exports.verifyMilestone=onCall(opts,async r=>{
+ owner(r);
+ const entryId=str(r.data?.entryId,140),milestoneId=str(r.data?.milestoneId,140);
+ const ref=db.collection("entries").doc(entryId).collection("milestones").doc(milestoneId),s=await ref.get();
+ if(!s.exists)throw new HttpsError("not-found","Milestone not found.");
+ await ref.update({verified:bool(r.data?.verified),verifiedBy:r.auth.uid,verifiedAt:stamp()});
+ await audit("milestone_verified",entryId,r.auth.uid,{milestoneId});
+ return {ok:true};
+});
+exports.withdrawApplication=onCall(opts,async r=>{
+ requireAuth(r);
+ const id=str(r.data?.entryId,140),ref=db.collection("entries").doc(id),s=await ref.get();
+ if(!s.exists||s.get("applicantUid")!==r.auth.uid)throw new HttpsError("permission-denied","Not your application.");
+ if(["selected","not_selected"].includes(s.get("status")))
+  throw new HttpsError("failed-precondition","Contact Beacon to request a records or recognition review.");
+ await ref.update({status:"withdrawn",withdrawnAt:stamp(),lastUpdatedAt:stamp()});
+ await audit("application_withdrawn",id,r.auth.uid);
+ return {ok:true};
 });
