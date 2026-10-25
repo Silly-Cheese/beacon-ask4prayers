@@ -156,7 +156,7 @@ exports.getMyEntry=onCall(opts,async r=>{
    guardianStatus:d.guardianStatus,referenceStatus:d.referenceStatus,
    selectedAt:d.selectedAt?.toDate?.()?.toISOString?.()||null,publicId:d.publicId||null,
    founderNote:d.founderNote||"",recognitionName:d.recognitionName||d.studentName,
-   deliveryPreference:d.deliveryPreference||"digital",opportunities:true
+   deliveryPreference:d.deliveryPreference||"digital",address:d.address||null,opportunities:true
  }};
 });
 exports.listReviewQueue=onCall(opts,async r=>{
