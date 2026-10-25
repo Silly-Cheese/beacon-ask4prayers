@@ -18,7 +18,7 @@ export const callable = (name) => httpsCallable(functions, name);
 // Add the public reCAPTCHA Enterprise site key after registering this app
 // in Firebase App Check. Production intake requires a valid App Check token.
 // A site key is public and can safely live in this static file.
-export const APP_CHECK_SITE_KEY = 6LfhYv8tAAAAADEfyAT2WeF6Yy4V1dcPJZ3czBC-"";
+export const APP_CHECK_SITE_KEY = "6LfhYv8tAAAAADEfyAT2WeF6Yy4V1dcPJZ3czBC-";
 if (APP_CHECK_SITE_KEY) initializeAppCheck(app, {
   provider: new ReCaptchaEnterpriseProvider(APP_CHECK_SITE_KEY),
   isTokenAutoRefreshEnabled: true
