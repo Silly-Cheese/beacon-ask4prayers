@@ -1,0 +1,70 @@
+/* Beacon identity: coordinated with ask4prayers.com's black-and-warm-ivory theme. */
+:root{color-scheme:dark;--bg:#000;--bg2:#080706;--panel:#100e0c;--gold:#d8c3a5;--gold-strong:#f5e3c7;--cream:#f8f1e7;--text:#f7f2ea;--muted:#bdb2a5;--line:rgba(216,195,165,.16);--font:Inter,system-ui,sans-serif;--serif:'Playfair Display',Georgia,serif}
+body{background:radial-gradient(circle at 78% 5%,rgba(216,195,165,.09),transparent 34rem),#000;color:var(--text);font-family:var(--font)}
+.site-header{background:rgba(0,0,0,.92);border-bottom:1px solid rgba(216,195,165,.12)}
+.site-footer{background:#050403}
+.hero-art{background:radial-gradient(circle at 49% 38%,rgba(216,195,165,.16),transparent 42%),radial-gradient(circle at 52% 52%,#17130f,#030302 70%);border-radius:30px;border-color:rgba(216,195,165,.18)}
+.hero-star{color:#f5e3c7;text-shadow:0 0 58px rgba(216,195,165,.44)}
+.pale,.proof-strip,.form-aside,.account-card,.form-section{background:#090807}
+.quote-section{background:linear-gradient(120deg,#120e0a,#030302)}
+.footer-cta{background:radial-gradient(circle at center,rgba(216,195,165,.12),transparent 60%),#090706}
+.path-card,.entry-row{background:#080706}
+.halo{border-color:rgba(216,195,165,.25)}
+h1,h2,h3{font-weight:700}
+h1 em,h2 em{font-style:normal}
+nav .nav-account,.btn,.form-aside,.path-card,.form-section,.account-card,.entry-row,.notice{border-radius:17px}
+.btn{border-radius:999px}
+.btn-gold{background:var(--gold-strong);color:#0b0907;border-color:var(--gold-strong)}
+.btn-gold:hover{background:#fff0d2}
+.nav-shell{max-width:1280px}
+.site-header nav a{font-weight:700}
+input,select,textarea{accent-color:var(--gold)}
+label input:not([type=radio]):not([type=checkbox]),label textarea,label select{background:#050404!important;border:1px solid rgba(216,195,165,.23)!important;border-radius:13px!important;color:var(--text)!important}
+label input:focus,label textarea:focus,label select:focus{outline:2px solid rgba(216,195,165,.55);outline-offset:2px}
+input::placeholder,textarea::placeholder{color:#938577}
+.wizard-top{padding:22px 26px;border-radius:18px;border:1px solid var(--line);background:#090706}
+.wizard-progress{display:flex;gap:5px;margin-top:18px}
+.wizard-progress span{display:block;height:6px;flex:1;border-radius:999px;background:#29241f}
+.wizard-progress span.done{background:var(--gold)}
+.wizard-step{margin:0;border:1px solid var(--line);padding:28px;border-radius:20px;background:#090807;min-width:0}
+.wizard-step legend{padding:0 8px;font-family:var(--serif);font-weight:700;font-size:1.8rem;color:var(--cream)}
+.wizard-step .help{margin-bottom:23px}
+.wizard-step>label{margin-bottom:20px}
+.wizard-actions{display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap;padding-top:14px}
+.wizard-actions .help{flex:1;text-align:center}
+.form-layout{grid-template-columns:minmax(0,1fr) 290px}
+.account-card{padding:30px}
+.account-card h2{font-weight:700}
+#student-auth-gate{margin-top:24px}
+#student-auth-gate[hidden]+#student-intake-gate{}
+.entry-row{border-color:var(--line)}
+.entry-row strong{font-family:var(--font)}
+.entry-row button{margin-top:9px}
+.status-pill{border:1px solid var(--line);border-radius:999px;padding:5px 12px;color:var(--gold);font-size:12px;font-weight:700;display:inline-block;margin:4px 0}
+.portal-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin:20px 0}
+.portal-tile{background:#100e0c;border:1px solid var(--line);border-radius:20px;padding:24px}
+.portal-tile h3{font-size:1.35rem}
+.portal-tile p{color:var(--muted);font-size:14px}
+.portal-actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:15px 0}
+#review-detail{margin-top:24px}
+.review-card{border:1px solid var(--line);border-radius:22px;background:#080706;padding:26px;margin-bottom:24px}
+.review-card h2{font-size:1.9rem}
+.review-card label{display:block;margin-bottom:15px}
+.review-actions{display:flex;flex-wrap:wrap;gap:12px;margin:16px 0}
+.review-card pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:.88rem}
+.review-score{display:flex;align-items:center;justify-content:space-between;gap:16px}
+.review-score input{width:92px!important}
+.signature{font-family:var(--serif);font-size:1.8rem;font-style:italic}
+.paper-document{color:#2a2118;background:#fcf8ef;padding:45px 48px;box-shadow:0 16px 80px #0005;max-width:760px;margin:25px auto;border:1px solid #d3bf9d;border-radius:4px}
+.paper-document h2,.paper-document h3,.paper-document .signature{color:#201911}
+.paper-document p,.paper-document small{color:#453a2d}
+.paper-document .paper-divider{height:2px;background:#ae956f;margin:25px 0}
+.paper-document .paper-kicker{color:#786042;font-weight:800;font-size:11px;letter-spacing:.22em}
+.paper-document .recipient-name{font-size:clamp(2rem,6vw,3.8rem);line-height:1.2;overflow-wrap:anywhere}
+.paper-document .paper-seal{width:86px;height:86px;display:grid;place-items:center;border:2px solid #a38454;border-radius:50%;font-size:45px;color:#8c6b43;margin:22px auto}
+.paper-document.cert{text-align:center}
+.danger-text{color:#ffd0c7}
+#notice{background:#15100b;color:var(--text)}
+@media(max-width:940px){.form-layout{grid-template-columns:1fr}.form-aside{position:static}}
+@media(max-width:650px){.wizard-step{padding:20px}.wizard-step legend{font-size:1.45rem}.wizard-actions{justify-content:stretch}.wizard-actions .btn{flex:1}.wizard-actions .help{order:3;flex-basis:100%}.portal-grid{grid-template-columns:1fr}.paper-document{padding:24px}.review-card{padding:18px}}
+@media print{body{background:#fff!important;color:#000!important}.site-header,.site-footer,.view-page>*:not(.print-only),.footer-cta,.notice{display:none!important}#scholar-view{display:block!important;padding:0!important;min-height:0!important}.paper-document{display:block!important;box-shadow:none!important;border:0!important;color:#000!important;max-width:none!important;page-break-inside:avoid}.paper-document:not(.print-target){display:none!important}.paper-document.print-target{display:block!important}#scholar-content{display:block!important;border:none!important;padding:0!important;background:#fff!important}#scholar-content>*:not(.paper-document){display:none!important}}
