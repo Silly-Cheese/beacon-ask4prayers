@@ -1,4 +1,4 @@
-import {auth,callable} from "./firebase.js";
+import {auth,callable,APP_CHECK_SITE_KEY} from "./firebase.js";
 import {
   onAuthStateChanged,signInWithEmailAndPassword,createUserWithEmailAndPassword,
   signInAnonymously,signOut,sendEmailVerification,sendPasswordResetEmail,reload
@@ -30,6 +30,7 @@ function el(tag,txt,klass){
   if(klass)n.className=klass;return n;
 }
 function whenOpen(){
+  if(!APP_CHECK_SITE_KEY)throw Error("App Check is not fully configured in the Beacon website. Add the public reCAPTCHA Enterprise site key to firebase.js.");
   if(!settings.intakeOpen)throw Error("Application intake is closed while safeguards and program policies are finalized.");
 }
 function accountNeeded(){return !!currentUser&&!currentUser.isAnonymous;}
@@ -65,13 +66,16 @@ function refreshGates(){
  $("account-link").textContent=signed?"My Account":"Sign in";
  $("student-auth-gate").hidden=signed;
  $("student-wizard").hidden=!signed;
- $("student-intake-gate").hidden=settings.intakeOpen;
- $("nomination-intake-gate").hidden=settings.intakeOpen;
+ $("student-intake-gate").hidden=settings.intakeOpen&&!!APP_CHECK_SITE_KEY;
+ $("nomination-intake-gate").hidden=settings.intakeOpen&&!!APP_CHECK_SITE_KEY;
+ const appMessage=!APP_CHECK_SITE_KEY?"App Check is registered but the reCAPTCHA Enterprise site key must also be placed in firebase.js before secure submissions can work.":"Applications are not open yet. You can explore the steps, but sending student information is disabled.";
+ $("student-intake-gate").textContent=appMessage;
+ $("nomination-intake-gate").textContent=appMessage;
  $("account-email").textContent=signed?currentUser.email:"";
  $("account-verification").textContent=signed?(currentUser.emailVerified?"Email verified":"Check your email and verify it before submitting your final application."):"";
  $("verify-email").hidden=!signed||currentUser.emailVerified;
- $("nom-submit").disabled=!settings.intakeOpen;
- qsa("#student-form input,#student-form select,#student-form textarea,#student-form button").forEach(n=>n.disabled=!settings.intakeOpen);
+ $("nom-submit").disabled=!settings.intakeOpen||!APP_CHECK_SITE_KEY;
+ qsa("#student-form input,#student-form select,#student-form textarea,#student-form button").forEach(n=>n.disabled=!settings.intakeOpen||!APP_CHECK_SITE_KEY);
  // Nominations remain previewable, but cannot be submitted while intake is closed.
  const signedEmail=currentUser?.email||"";
  const nomEmail=qs('[name="nominatorEmail"]',$("nomination-form"));
