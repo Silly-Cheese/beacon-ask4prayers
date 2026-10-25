@@ -5,7 +5,7 @@ import {
 } from "https://www.gstatic.com/firebasejs/13.1.0/firebase-auth.js";
 const $=id=>document.getElementById(id),qs=(s,root=document)=>root.querySelector(s),qsa=(s,root=document)=>[...root.querySelectorAll(s)];
 const call=async(name,data={})=>(await callable(name)(data)).data;
-const PAGE={home:"public-view",mission:"public-view",selection:"public-view",opportunities:"public-view",faq:"public-view",apply:"apply-view",nominate:"nominate-view",account:"account-view",dashboard:"dashboard-view",scholar:"scholar-view",committee:"committee-view",policy:"policy-view",reference:"reference-view",consent:"consent-view"};
+const PAGE={home:"public-view",mission:"public-view",selection:"public-view",opportunities:"public-view",faq:"public-view",apply:"apply-view",nominate:"nominate-view",account:"account-view",dashboard:"dashboard-view",scholar:"scholar-view",committee:"committee-view",policy:"policy-view",reference:"reference-view",consent:"consent-view",claim:"claim-view"};
 let currentUser=null,settings={cycle:"2027",intakeOpen:false},step=0,draftLoadedFor=null,saveTimer=null,saving=false,inviteToken=null,activeScholarId=null,privateInvite=null;
 const stepNames=["Your identity","Academic journey","Service and leadership","Personal essay","Two references","Guardian information","Review and submit"];
 const numericKeys=new Set(["graduationYear","gpa"]);
@@ -37,7 +37,7 @@ function route(){
  const raw=decodeURIComponent(location.hash.slice(1)||"home");
  const [key,...parts]=raw.split("/");
  const page=PAGE[key]?key:"home";
- inviteToken=(page==="reference"||page==="consent")?parts.join("/"):null;
+ inviteToken=(page==="reference"||page==="consent"||page==="claim")?parts.join("/"):null;
  Object.values(PAGE).forEach(id=>{const node=$(id);if(node)node.hidden=true;});
  $(PAGE[page]).hidden=false;
  $("main-nav").classList.remove("open");$("menu-toggle").setAttribute("aria-expanded","false");
@@ -50,6 +50,7 @@ function route(){
  if(page==="committee")showCommittee();
  if(page==="scholar")showScholar();
  if(page==="reference"||page==="consent")loadInvitation(page);
+ if(page==="claim")loadClaim();
 }
 $("menu-toggle").addEventListener("click",()=>{
  const open=$("main-nav").classList.toggle("open");$("menu-toggle").setAttribute("aria-expanded",String(open));
@@ -338,6 +339,25 @@ const prompts=[
 $("reference-questions").replaceChildren(...prompts.map((q,i)=>{
  const l=el("label",q);const t=el("textarea");t.name="answer"+i;t.rows=4;t.required=true;t.minLength=15;t.maxLength=1600;l.append(t);return l;
 }));
+async function loadClaim(){
+ const info=$("claim-info");
+ if(!inviteToken){info.textContent="No invitation token was provided.";return;}
+ try{
+  const result=await call("getInvitation",{token:inviteToken});
+  if(result.kind!=="scholar")throw Error("This invitation is not for a Scholar account.");
+  info.textContent="You've been invited to connect the nomination for "+result.recipientName+". Sign in with your verified invited email address to continue.";
+ }catch(err){info.textContent=readable(err);}
+}
+$("claim-now").addEventListener("click",async()=>{
+ if(!accountNeeded()){notify("Sign in or create your Beacon account, then return to the private claim link.");return;}
+ try{
+  await reload(auth.currentUser);
+  const result=await call("claimNomination",{token:inviteToken});
+  history.replaceState(null,"",location.pathname+"#dashboard");
+  notify("Your nomination is now connected to your Beacon account. No separate application is required.");
+  route();
+ }catch(e){notify(readable(e));}
+});
 async function loadInvitation(kind){
  const intro=$(kind+"-intro"),form=$(kind+"-form");
  form.hidden=false;intro.textContent="Checking the invitation…";
@@ -420,6 +440,30 @@ async function openReview(entryId){
   const guardian=el("button","Create guardian consent invitation","btn btn-outline");guardian.type="button";guardian.onclick=()=>invitation(entryId,"guardian",null);tools.append(guardian);
   if(d.guardianStatus==="signed_pending_verification"){const verify=el("button","Verify guardian authorization","btn btn-outline");verify.type="button";verify.onclick=()=>action("verifyRequirement",{entryId,kind:"guardian"},entryId);tools.append(verify);}
   refs.append(tools);container.append(refs);
+  const manage=el("section",undefined,"review-card");
+  manage.append(el("h2","Administrator: student details and invitations"));
+  manage.append(el("p","Use only confirmed information. Nominations can be submitted before the student's references or guardian contact information are available.","help"));
+  const dataForm=el("form",undefined,"entry-form");
+  dataForm.innerHTML='<div class="field-grid"><label>Nominee contact email <input type="email" name="applicantEmail"></label><label>Guardian email <input type="email" name="guardianEmail"></label><label>Guardian name <input name="guardianName"></label><label>Student age band <select name="ageBand"><option value="">Unknown</option><option value="minor">Under 18</option><option value="adult">18 or older</option></select></label><label>Verified unweighted GPA <input type="number" min="0" max="4" step=".01" name="gpa"></label></div><p>Qualified references</p><div class="field-grid"><label>Reference 1 name <input name="ref1Name"></label><label>Reference 1 email <input type="email" name="ref1Email"></label><label>Reference 2 name <input name="ref2Name"></label><label>Reference 2 email <input type="email" name="ref2Email"></label></div><button class="btn btn-outline" type="submit">Save verified contact details</button>';
+  for(const key of ["applicantEmail","guardianEmail","guardianName","ageBand","gpa"])if(d[key]!==null&&d[key]!==undefined&&dataForm.elements[key])dataForm.elements[key].value=String(d[key]);
+  (d.referenceSuggestions||[]).forEach((v,i)=>{const j=i+1;dataForm.elements["ref"+j+"Name"].value=v.name||"";dataForm.elements["ref"+j+"Email"].value=v.email||"";});
+  dataForm.addEventListener("submit",async e=>{
+   e.preventDefault();const f=new FormData(dataForm);
+   await action("updateEntryContacts",{entryId,fields:{
+    applicantEmail:f.get("applicantEmail"),guardianEmail:f.get("guardianEmail"),guardianName:f.get("guardianName"),
+    ageBand:f.get("ageBand")||"minor",gpa:f.get("gpa"),
+    references:[{name:f.get("ref1Name"),email:f.get("ref1Email")},{name:f.get("ref2Name"),email:f.get("ref2Email")}]
+   }},entryId);
+  });
+  manage.append(dataForm);
+  const claimBtn=el("button","Generate student account-claim invitation","btn btn-outline");
+  claimBtn.type="button";claimBtn.onclick=()=>invitation(entryId,"scholar",null);manage.append(claimBtn);
+  if(d.type==="nomination"&&d.nominator?.email){
+   const btn=el("button","Verify qualified nominator as reference 1","btn btn-outline");btn.type="button";
+   btn.onclick=()=>{if(confirm("I independently verified this nominator's identity and eligibility to serve as a reference."))action("useVerifiedNominatorReference",{entryId,slot:0,identityVerified:true},entryId);};
+   manage.append(btn);
+  }
+  container.append(manage);
   const control=el("section",undefined,"review-card");control.append(el("h2","Committee governance"));
   control.innerHTML+= '<p class="help">Scoring: Character 30 • Perseverance 25 • Service 20 • Leadership 15 • Potential 10. Three to five distinct reviews are required to finalize a selection.</p>';
   const reviewForm=el("form",undefined,"entry-form");reviewForm.innerHTML=
