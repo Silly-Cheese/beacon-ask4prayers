@@ -392,7 +392,8 @@ exports.updateEntryContacts=onCall(opts,async r=>{
  if("gpa" in fields){const n=fields.gpa===""?null:Number(fields.gpa);if(n!==null&&(!Number.isFinite(n)||n<0||n>4))err("GPA outside valid range.");changes.gpa=n;}
  if("references" in fields)changes.references=references(fields.references);
  const guardianChanged="guardianEmail" in changes&&changes.guardianEmail!==original.guardianEmail;
- const refsChanged="references" in changes&&JSON.stringify(changes.references)!==JSON.stringify(original.references||[]);
+ const refContacts=x=>(x||[]).map(z=>({name:str(z.name,120),email:mail(z.email)}));
+ const refsChanged="references" in changes&&JSON.stringify(refContacts(changes.references))!==JSON.stringify(refContacts(original.references));
  const applicantChanged="applicantEmail" in changes&&changes.applicantEmail!==original.applicantEmail;
  if(guardianChanged){changes.guardianStatus="pending";changes.guardianRecord=admin.firestore.FieldValue.delete();}
  if(refsChanged){changes.referenceCount=0;changes.referenceStatus="pending";}
