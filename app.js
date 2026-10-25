@@ -313,10 +313,14 @@ async function showScholar(){
   form.innerHTML='<div class="field-grid"><label>Recognition name <input name="recognitionName" maxlength="120" required></label><label>Delivery preference <select name="deliveryPreference"><option value="digital">Digital</option><option value="mail">Mail physical copies</option></select></label></div><div id="scholar-address" class="field-grid" hidden><label>Address or P.O. Box <input name="line1"></label><label>Apt / Unit <input name="line2"></label><label>City <input name="city"></label><label>State <input name="state"></label><label>ZIP <input name="zip"></label></div><label class="check-label"><input type="checkbox" name="publicityConsent"> Allow optional public recognition where all required guardian permissions are on file.</label><button class="btn btn-outline" type="submit">Save delivery preferences</button>';
   form.elements.recognitionName.value=record.recognitionName||record.studentName;
   form.elements.deliveryPreference.value=record.deliveryPreference||"digital";
+  if(record.address){
+   for(const field of ["line1","line2","city","state","zip"])form.elements[field].value=record.address[field]||"";
+   $("scholar-address").hidden=form.elements.deliveryPreference.value!=="mail";
+  }
   form.elements.deliveryPreference.addEventListener("change",()=>{$("scholar-address").hidden=form.elements.deliveryPreference.value!=="mail";});
   form.addEventListener("submit",async e=>{
    e.preventDefault();const d=new FormData(form);
-   try{await call("saveScholarPreferences",{entryId:activeScholarId,recognitionName:d.get("recognitionName"),deliveryPreference:d.get("deliveryPreference"),address:{line1:d.get("line1"),line2:d.get("line2"),city:d.get("city"),state:d.get("state"),zip:d.get("zip")},publicityConsent:d.has("publicityConsent")});notify("Scholar preferences saved securely.");}catch(err){notify(readable(err));}
+   try{await call("saveScholarPreferences",{entryId:activeScholarId,recognitionName:d.get("recognitionName"),deliveryPreference:d.get("deliveryPreference"),address:{line1:d.get("line1"),line2:d.get("line2"),city:d.get("city"),state:d.get("state"),zip:d.get("zip")},publicityConsent:d.has("publicityConsent")});notify("Scholar preferences saved securely.");await showScholar();}catch(err){notify(readable(err));}
   });
   root.append(form);
   root.append(el("h3","Milestones & achievements"));
