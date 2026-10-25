@@ -1,0 +1,30 @@
+name: Beacon Code Validation
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  validation:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Validate client JavaScript
+        run: node --check app.js && node --check firebase.js
+      - name: Validate Cloud Functions and role utility
+        run: node --check functions/index.js && node --check functions/grant-role.cjs
+      - name: Confirm required deployment files
+        run: |
+          test -f CNAME
+          test -f firestore.rules
+          test -f storage.rules
+          test -f firebase.json
+          test -f beacon-theme.css
+          test "$(cat CNAME)" = "beacon.ask4prayers.com"
