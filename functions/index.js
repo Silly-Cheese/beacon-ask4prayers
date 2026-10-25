@@ -176,6 +176,10 @@ exports.getReviewEntry=onCall(opts,async r=>{
    nominator:isAdmin(r)&&d.privacy!=="anonymous"?d.nominator:null,
    duplicateKey:d.duplicateKey,verifiedEligibility:d.verifiedEligibility===true,
    references:refs.docs.map(x=>({id:x.id,...x.data()})),
+   applicantEmail:isAdmin(r)?d.applicantEmail||"":null,
+   guardianEmail:isAdmin(r)?d.guardianEmail||"":null,
+   ageBand:d.ageBand||"unknown",
+   verifiedEligibility:d.verifiedEligibility===true,
    reviewCount:votes.size,approveVotes:votes.docs.filter(x=>x.get("recommend")==="select").length,
    myReview:votes.docs.find(x=>x.id===r.auth.uid)?.data()||null,
    recusalCount:recusals.size,
@@ -224,19 +228,20 @@ exports.setEligibility=onCall(opts,async r=>{
 exports.createInvitation=onCall(opts,async r=>{
  owner(r);
  const entryId=str(r.data?.entryId,140),kind=str(r.data?.kind,25),slot=Number(r.data?.slot);
- if(!["reference","guardian"].includes(kind))err("Choose guardian or reference.");
+ if(!["reference","guardian","scholar"].includes(kind))err("Choose guardian, reference or Scholar.");
  if(kind==="reference"&&![0,1].includes(slot))err("Choose reference 1 or 2.");
  const ref=db.collection("entries").doc(entryId),s=await ref.get();
  if(!s.exists)throw new HttpsError("not-found","Entry not found.");
  const d=s.data();
  if(["selected","not_selected"].includes(d.status))throw new HttpsError("failed-precondition","Decision already finalized.");
- const recipient=kind==="guardian"?{name:d.guardianName||"Guardian",email:d.guardianEmail}:{...(d.references||[])[slot]};
+ const recipient=kind==="guardian"?{name:d.guardianName||"Guardian",email:d.guardianEmail}:
+  kind==="scholar"?{name:d.studentName,email:d.applicantEmail}:{...(d.references||[])[slot]};
  if(!recipient?.email)throw new HttpsError("failed-precondition","This entry is missing the recipient email. Ask applicant to correct it.");
  const token=SECRET(),invite=db.collection("invitations").doc(hash(token)),expires=Date.now()+14*86400000;
  await invite.set({entryId,kind,slot:kind==="reference"?slot:null,recipientName:recipient.name||"",recipientEmail:recipient.email,status:"pending",createdBy:r.auth.uid,createdAt:stamp(),expiresAt:admin.firestore.Timestamp.fromMillis(expires),usedAt:null});
  await audit("invitation_created",entryId,r.auth.uid,{kind,slot});
  // Only an admin receives this private URL. Send to the verified intended recipient via a secure channel.
- return {url:origin+"/#"+(kind==="guardian"?"consent/":"reference/")+token,recipientEmail:recipient.email,expiresAt:new Date(expires).toISOString()};
+ return {url:origin+"/#"+(kind==="guardian"?"consent/":kind==="scholar"?"claim/":"reference/")+token,recipientEmail:recipient.email,expiresAt:new Date(expires).toISOString()};
 });
 exports.getInvitation=onCall(opts,async r=>{
  const token=str(r.data?.token,150),s=await db.collection("invitations").doc(hash(token)).get();
@@ -336,4 +341,62 @@ exports.saveScholarPreferences=onCall(opts,async r=>{
   scholarAccepted:true,acceptedAt:stamp(),lastUpdatedAt:stamp()});
  await audit("scholar_accepted",id,r.auth.uid);
  return {ok:true};
+});
+
+exports.updateEntryContacts=onCall(opts,async r=>{
+ owner(r);
+ const id=str(r.data?.entryId,140),ref=db.collection("entries").doc(id),snap=await ref.get();
+ if(!snap.exists)throw new HttpsError("not-found","Entry not found.");
+ if(["selected","not_selected"].includes(snap.get("status")))throw new HttpsError("failed-precondition","Entry finalized.");
+ const fields=r.data?.fields||{},changes={lastUpdatedAt:stamp()};
+ if("guardianEmail" in fields)changes.guardianEmail=mail(fields.guardianEmail);
+ if("guardianName" in fields)changes.guardianName=str(fields.guardianName,120);
+ if("applicantEmail" in fields)changes.applicantEmail=mail(fields.applicantEmail);
+ if("ageBand" in fields){if(!["minor","adult"].includes(fields.ageBand))err("Invalid age band.");changes.ageBand=fields.ageBand;}
+ if("gpa" in fields){const n=fields.gpa===""?null:Number(fields.gpa);if(n!==null&&(!Number.isFinite(n)||n<0||n>4))err("GPA outside valid range.");changes.gpa=n;}
+ if("references" in fields)changes.references=references(fields.references);
+ await ref.update(changes);
+ await audit("admin_contact_update",id,r.auth.uid,{fields:Object.keys(changes).filter(k=>k!=="lastUpdatedAt")});
+ return {ok:true};
+});
+exports.useVerifiedNominatorReference=onCall(opts,async r=>{
+ owner(r);
+ const entryId=str(r.data?.entryId,140),entry=db.collection("entries").doc(entryId),doc=await entry.get();
+ if(!doc.exists)throw new HttpsError("not-found","Entry unavailable.");
+ const d=doc.data();
+ if(d.type!=="nomination"||d.privacy==="anonymous"||!d.nominator?.email)throw new HttpsError("failed-precondition","No identified nominator for this entry.");
+ const slot=Number(r.data?.slot);
+ if(![0,1].includes(slot))err("Choose reference slot 1 or 2.");
+ if(!bool(r.data?.identityVerified))err("Verify nominator identity independently first.");
+ const ref=entry.collection("references").doc(String(slot));
+ await ref.set({fullName:d.nominator.name,signature:"Verified nominator statement",answers:[
+  d.nominator.relationship||"Known by nominator",
+  d.personalStatement,d.personalStatement,
+  d.personalStatement,d.personalStatement
+ ],recipientEmail:d.nominator.email,slot,submittedAt:d.submittedAt,verified:true,
+  verifiedBy:r.auth.uid,verifiedAt:stamp(),source:"verified_nominator"});
+ const all=await entry.collection("references").get();
+ const count=all.docs.filter(x=>x.get("verified")===true||x.id===String(slot)).length;
+ await entry.update({referenceCount:count,referenceStatus:count>=2?"verified":"pending"});
+ await audit("nominator_as_reference",entryId,r.auth.uid,{slot});
+ return {ok:true};
+});
+exports.claimNomination=onCall(opts,async r=>{
+ requireAuth(r);
+ if(!r.auth.token.email_verified)throw new HttpsError("failed-precondition","Verify your account email first.");
+ const token=str(r.data?.token,150),invite=db.collection("invitations").doc(hash(token)),s=await invite.get();
+ if(!s.exists||s.get("kind")!=="scholar"||s.get("status")!=="pending"||s.get("expiresAt").toMillis()<Date.now())
+  throw new HttpsError("not-found","Claim invitation invalid or expired.");
+ if(s.get("recipientEmail")!==r.auth.token.email?.toLowerCase())
+  throw new HttpsError("permission-denied","Sign in using the email address invited by Beacon.");
+ const entry=db.collection("entries").doc(s.get("entryId"));
+ await db.runTransaction(async tx=>{
+  const [fresh,e]=await Promise.all([tx.get(invite),tx.get(entry)]);
+  if(fresh.get("status")!=="pending"||!e.exists)throw new HttpsError("failed-precondition","Claim unavailable.");
+  if(e.get("applicantUid")&&e.get("applicantUid")!==r.auth.uid)throw new HttpsError("already-exists","Record belongs to another account.");
+  tx.update(entry,{applicantUid:r.auth.uid,applicantEmail:r.auth.token.email.toLowerCase(),lastUpdatedAt:stamp()});
+  tx.update(invite,{status:"completed",usedAt:stamp()});
+ });
+ await audit("nominee_claimed",s.get("entryId"),r.auth.uid);
+ return {ok:true,entryId:s.get("entryId")};
 });
