@@ -253,10 +253,18 @@ exports.createInvitation=onCall(opts,async r=>{
  const ref=db.collection("entries").doc(entryId),s=await ref.get();
  if(!s.exists)throw new HttpsError("not-found","Entry not found.");
  const d=s.data();
- if(kind!=="scholar"&&["selected","not_selected"].includes(d.status))throw new HttpsError("failed-precondition","Decision already finalized.");
+ if(["merged","withdrawn"].includes(d.status)||(kind!=="scholar"&&["selected","not_selected"].includes(d.status)))throw new HttpsError("failed-precondition","Entry is not accepting this invitation.");
  const recipient=kind==="guardian"?{name:d.guardianName||"Guardian",email:d.guardianEmail}:
   kind==="scholar"?{name:d.studentName,email:d.applicantEmail}:{...(d.references||[])[slot]};
  if(!recipient?.email)throw new HttpsError("failed-precondition","This entry is missing the recipient email. Ask applicant to correct it.");
+ if(kind==="guardian"&&d.guardianStatus==="verified")throw new HttpsError("failed-precondition","Guardian consent is already verified. Withdraw it before issuing another invitation.");
+ if(kind==="reference"){
+  const oldReference=await ref.collection("references").doc(String(slot)).get();
+  if(oldReference.get("verified")===true)throw new HttpsError("failed-precondition","Reference already verified. Invalidate it before requesting a replacement.");
+ }
+ const previous=await db.collection("invitations").where("entryId","==",entryId).limit(100).get();
+ const superseded=previous.docs.filter(x=>x.get("status")==="pending"&&x.get("kind")===kind&&(kind!=="reference"||x.get("slot")===slot));
+ await Promise.all(superseded.map(x=>x.ref.update({status:"superseded",supersededAt:stamp()})));
  const token=SECRET(),invite=db.collection("invitations").doc(hash(token)),expires=Date.now()+14*86400000;
  await invite.set({entryId,kind,slot:kind==="reference"?slot:null,recipientName:recipient.name||"",recipientEmail:recipient.email,status:"pending",createdBy:r.auth.uid,createdAt:stamp(),expiresAt:admin.firestore.Timestamp.fromMillis(expires),usedAt:null});
  await audit("invitation_created",entryId,r.auth.uid,{kind,slot});
@@ -390,7 +398,7 @@ exports.updateEntryContacts=onCall(opts,async r=>{
  owner(r);
  const id=str(r.data?.entryId,140),ref=db.collection("entries").doc(id),snap=await ref.get();
  if(!snap.exists)throw new HttpsError("not-found","Entry not found.");
- if(["selected","not_selected"].includes(snap.get("status")))throw new HttpsError("failed-precondition","Entry finalized.");
+ if(["selected","not_selected","merged","withdrawn"].includes(snap.get("status")))throw new HttpsError("failed-precondition","Entry is closed.");
  const original=snap.data(),fields=r.data?.fields||{},changes={lastUpdatedAt:stamp()};
  if("guardianEmail" in fields)changes.guardianEmail=mail(fields.guardianEmail);
  if("guardianName" in fields)changes.guardianName=str(fields.guardianName,120);
@@ -428,7 +436,7 @@ exports.useVerifiedNominatorReference=onCall(opts,async r=>{
  const entryId=str(r.data?.entryId,140),entry=db.collection("entries").doc(entryId),doc=await entry.get();
  if(!doc.exists)throw new HttpsError("not-found","Entry unavailable.");
  const d=doc.data();
- if(d.type!=="nomination"||d.privacy==="anonymous"||!d.nominator?.email)throw new HttpsError("failed-precondition","No identified nominator for this entry.");
+ if(d.type!=="nomination"||d.privacy==="anonymous"||!d.nominator?.email||["merged","withdrawn","selected","not_selected"].includes(d.status))throw new HttpsError("failed-precondition","No eligible verified nominator for this open entry.");
  const slot=Number(r.data?.slot);
  if(![0,1].includes(slot))err("Choose reference slot 1 or 2.");
  if(!bool(r.data?.identityVerified))err("Verify nominator identity independently first.");
