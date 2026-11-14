@@ -19,15 +19,19 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\deploy-beacon.ps1
 
 If deployment fails, follow the Firebase CLI message. The project needs a Firestore database and the Blaze plan to deploy Cloud Functions. Under [Authentication](https://console.firebase.google.com/project/beacon-ask4prayers/authentication/providers), enable Email/Password for Beacon accounts and Anonymous for anonymous nominations. Add `beacon.ask4prayers.com` to [Authorized domains](https://console.firebase.google.com/project/beacon-ask4prayers/authentication/settings).
 
-## Open or close entries
+## Set an intake deadline or close entries
 
-Sign in as a Beacon administrator and open the [Committee page](https://beacon.ask4prayers.com/#committee). At the top, select **Open applications and nominations** or **Close applications and nominations**. Changes take effect without a deployment. Both forms share this setting. Existing entries stay in the review queue.
+Sign in as a Beacon administrator and open the [Committee page](https://beacon.ask4prayers.com/#committee). At the top, use **Intake deadline** to save the last day for new applications and nominations. The deadline ends at 11:59 p.m. Central Time. It appears on the public pages automatically. Use **Open intake manually** or **Close intake manually** to control intake before that deadline. Extend or remove a passed deadline to reopen intake, with the manual switch set to open. Entries already received remain in the review queue, and follow-up can continue on open entries.
 
 Intake starts closed on a fresh deployment. If a prior deployment set `BEACON_INTAKE_OPEN`, that value carries forward until an administrator uses the Committee control. After the first change in the Committee page, the saved website setting takes precedence.
 
 ## Review entries
 
 Reviewers create a Beacon account using the email address that the administrator will authorize. Use the Firebase Admin SDK credentials and role commands described in [IMPLEMENTATION.md](IMPLEMENTATION.md). After the role is granted, the reviewer signs out and back in, then goes to [Committee](https://beacon.ask4prayers.com/#committee) and selects **Open Selection File**.
+
+Administrators can advance an entry from **Submitted** to **Eligibility screening**, verify eligibility to move into **Committee review**, then advance to **Finalist** once the required forms are verified. The **Final decision** section applies the existing review requirements when naming a Scholar. Class of 2027 is capped at two Scholars.
+
+The **Selection stages** section lets administrators move an entry back one stage or reopen a decision with a reason. Reopening a Scholar decision returns the entry to Finalist and suspends verification and Passport access until the decision is recorded again. Reviewers can see the stages and record their evaluations. Students see the status of their own linked entries in My Dashboard.
 
 After opening entries, submit a fictional application and nomination and confirm each receipt appears in the Committee queue. Administrators can issue guardian and reference invitations there. Links can be delivered manually or queued by a configured Firebase Trigger Email extension.
 

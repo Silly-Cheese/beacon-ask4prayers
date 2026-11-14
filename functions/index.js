@@ -20,10 +20,22 @@ const staff=r=>{requireAuth(r);if(!(r.auth.token.admin===true||r.auth.token.revi
 const owner=r=>{requireAuth(r);if(r.auth.token.admin!==true)throw new HttpsError("permission-denied","Administrator access required.");};
 const isAdmin=r=>r.auth?.token?.admin===true;
 const intakeRef=db.collection("programSettings").doc(cycle);
-const isIntakeOpen=snapshot=>snapshot.get("intakeOpen")??(legacyIntake.value().trim().toLowerCase()==="true");
+const centralDate=new Intl.DateTimeFormat("en-CA",{timeZone:"America/Chicago",year:"numeric",month:"2-digit",day:"2-digit"});
+const intakeEnabled=snapshot=>snapshot.get("intakeOpen")??(legacyIntake.value().trim().toLowerCase()==="true");
+function intakeSettings(snapshot){
+ const intakeDeadline=snapshot.get("intakeDeadline")||null;
+ const intakeManuallyOpen=intakeEnabled(snapshot);
+ const parts=Object.fromEntries(centralDate.formatToParts(new Date()).map(({type,value})=>[type,value]));
+ const deadlinePassed=!!intakeDeadline&&[parts.year,parts.month,parts.day].join("-")>intakeDeadline;
+ return {cycle,intakeOpen:intakeManuallyOpen&&!deadlinePassed,intakeManuallyOpen,intakeDeadline,deadlinePassed,
+  honoraryOnly:true,brandedVerification:beaconMail.enabled()};
+}
 async function requireOpenIntake(tx){
- if(!isIntakeOpen(await tx.get(intakeRef)))
-  throw new HttpsError("failed-precondition","Applications and nominations are currently closed.");
+ const settings=intakeSettings(await tx.get(intakeRef));
+ if(!settings.intakeOpen)
+  throw new HttpsError("failed-precondition",settings.deadlinePassed
+   ?"The deadline for applications and nominations has passed."
+   :"Applications and nominations are currently closed.",{intakeClosed:true});
 }
 const hash=v=>crypto.createHash("sha256").update(v).digest("hex");
 const SECRET=(v)=>crypto.randomBytes(32).toString("base64url");
@@ -113,22 +125,30 @@ function queueStudentForms(tx,entryId,entry,uid,referenceSlots,guardianNeeded){
  }
  return true;
 }
-exports.getProgramSettings=onCall(opts,async()=>({
- cycle,intakeOpen:isIntakeOpen(await intakeRef.get()),honoraryOnly:true,brandedVerification:beaconMail.enabled()
-}));
+exports.getProgramSettings=onCall(opts,async()=>intakeSettings(await intakeRef.get()));
 exports.setIntakeStatus=onCall(opts,async r=>{
  owner(r);
- const intakeOpen=r.data?.intakeOpen;
- if(typeof intakeOpen!=="boolean")err("Choose whether to open or close applications and nominations.");
+ const {intakeOpen,intakeDeadline}=r.data||{};
+ if(intakeOpen!==undefined&&typeof intakeOpen!=="boolean")err("Choose whether to open or close applications and nominations.");
+ if(intakeDeadline!==undefined&&intakeDeadline!==null){
+  if(typeof intakeDeadline!=="string"||!/^\d{4}-\d{2}-\d{2}$/.test(intakeDeadline)||intakeDeadline.slice(0,4)<"2000")
+   err("Enter a valid deadline date.");
+  const date=new Date(intakeDeadline+"T00:00:00Z");
+  if(!Number.isFinite(date.getTime())||date.toISOString().slice(0,10)!==intakeDeadline)err("Enter a valid deadline date.");
+ }
+ if(intakeOpen===undefined&&intakeDeadline===undefined)err("Choose an intake setting to update.");
  await db.runTransaction(async tx=>{
   const settings=await tx.get(intakeRef);
-  if(settings.exists&&settings.get("intakeOpen")===intakeOpen)return;
-  tx.set(intakeRef,{intakeOpen,updatedAt:stamp(),updatedBy:r.auth.uid},{merge:true});
+  const changes={};
+  if(intakeOpen!==undefined&&settings.get("intakeOpen")!==intakeOpen)changes.intakeOpen=intakeOpen;
+  if(intakeDeadline!==undefined&&(settings.get("intakeDeadline")||null)!==intakeDeadline)changes.intakeDeadline=intakeDeadline;
+  if(!Object.keys(changes).length)return;
+  tx.set(intakeRef,{...changes,updatedAt:stamp(),updatedBy:r.auth.uid},{merge:true});
   tx.create(db.collection("auditLogs").doc(),{
-   action:"intake_status_changed",cycle,intakeOpen,actorUid:r.auth.uid,at:stamp()
+   action:"intake_settings_changed",cycle,...changes,actorUid:r.auth.uid,at:stamp()
   });
  });
- return {cycle,intakeOpen,honoraryOnly:true,brandedVerification:beaconMail.enabled()};
+ return intakeSettings(await intakeRef.get());
 });
 exports.getDraft=onCall(opts,async r=>{
  requireAuth(r);
@@ -254,20 +274,29 @@ exports.getMyEntry=onCall(opts,async r=>{
  const milestoneSnap=await doc.ref.collection("milestones").orderBy("createdAt","desc").limit(30).get();
  return {entry:{
    milestones:milestoneSnap.docs.map(m=>({id:m.id,title:m.get("title"),details:m.get("details"),date:m.get("date"),verified:m.get("verified")===true})),
-   ...safeSummary(d,doc.id),preferredName:d.preferredName||"",
+   ...safeSummary(d,doc.id),wasFinalist:!!d.finalistAt,preferredName:d.preferredName||"",
    school:d.school,submittedAt:d.submittedAt?.toDate?.()?.toISOString?.()||null,
    guardianStatus:d.guardianStatus,referenceStatus:d.referenceStatus,
    selectedAt:d.selectedAt?.toDate?.()?.toISOString?.()||null,publicId:d.publicId||null,
-   founderNote:d.founderNote||"",recognitionName:d.recognitionName||d.studentName,
+   founderNote:d.status==="selected"?d.founderNote||"":"",recognitionName:d.recognitionName||d.studentName,
    deliveryPreference:d.deliveryPreference||"digital",address:d.address||null,opportunities:true,
    nominationFollowUp:d.type==="nomination"?await nominationFollowUp(doc):null
  }};
 });
 exports.listReviewQueue=onCall(opts,async r=>{
  staff(r);
- const q=await db.collection("entries").orderBy("submittedAt","desc").limit(80).get();
- return {entries:q.docs.map(s=>safeSummary(s.data(),s.id)),
-  intake:isAdmin(r)?{cycle,intakeOpen:isIntakeOpen(await intakeRef.get()),honoraryOnly:true}:null
+ const cursor=str(r.data?.cursor,140);
+ let query=db.collection("entries").orderBy("submittedAt","desc").orderBy(admin.firestore.FieldPath.documentId(),"desc");
+ if(cursor){
+  if(cursor.includes("/"))err("Invalid queue cursor.");
+  const after=await db.collection("entries").doc(cursor).get();
+  if(!after.get("submittedAt"))err("Invalid queue cursor.");
+  query=query.startAfter(after);
+ }
+ const [q,settings]=await Promise.all([query.limit(81).get(),isAdmin(r)?intakeRef.get():null]);
+ const page=q.docs.slice(0,80);
+ return {entries:page.map(s=>safeSummary(s.data(),s.id)),nextCursor:q.size>80?page.at(-1).id:null,
+  intake:settings?intakeSettings(settings):null
  };
 });
 exports.getReviewEntry=onCall(opts,async r=>{
@@ -281,15 +310,16 @@ exports.getReviewEntry=onCall(opts,async r=>{
  const recusals=await db.collection("entries").doc(id).collection("recusals").get();
  if(recusals.docs.some(x=>x.id===r.auth.uid))throw new HttpsError("permission-denied","You have recused yourself from reviewing this entry.");
  return {entry:{
-   ...safeSummary(d,id),canManage:isAdmin(r),school:d.school,graduationYear:d.graduationYear,gpa:d.gpa,
+   ...safeSummary(d,id),selectionStages:true,canManage:isAdmin(r),school:d.school,graduationYear:d.graduationYear,gpa:d.gpa,
    personalStatement:d.personalStatement,activities:d.activities,academicInterests:d.academicInterests,
    service:d.service,futureGoals:d.futureGoals,responsibilities:d.responsibilities,
    honors:d.honors,additionalInfo:d.additionalInfo,guardianStatus:d.guardianStatus,
    referenceStatus:d.referenceStatus,referenceCount:d.referenceCount||0,
+   nominationFollowUpNeeded:!!d.entryKeyHash&&!d.nominationFollowUp?.requestedAt,
    referenceSuggestions:isAdmin(r)?d.references||[]:[],
    duplicateCount:(await db.collection("entries").where("duplicateKey","==",d.duplicateKey).limit(10).get()).size,
    nominator:isAdmin(r)&&d.privacy!=="anonymous"?d.nominator:null,
-   duplicateKey:d.duplicateKey,verifiedEligibility:d.verifiedEligibility===true,
+   duplicateKey:d.duplicateKey,eligibilityNote:isAdmin(r)?d.eligibilityNote||"":"",
    references:refs.docs.map(x=>{
      const reference=x.data();
      if(isAdmin(r))return {id:x.id,...reference};
@@ -306,7 +336,8 @@ exports.getReviewEntry=onCall(opts,async r=>{
      nominator:isAdmin(r)?v.get("nominator"):null,
      sourceEntryId:isAdmin(r)?v.get("sourceEntryId"):null
    })),
-   reviewCount:votes.size,decisionMethod:isAdmin(r)?d.decisionMethod||null:null,approveVotes:votes.docs.filter(x=>x.get("recommend")==="select").length,
+   reviewCount:votes.size,decisionFromStatus:isAdmin(r)?d.decisionFromStatus||null:null,
+   finalistAt:d.finalistAt?.toDate?.()?.toISOString?.()||null,decisionMethod:isAdmin(r)?d.decisionMethod||null:null,approveVotes:votes.docs.filter(x=>x.get("recommend")==="select").length,
    myReview:votes.docs.find(x=>x.id===r.auth.uid)?.data()||null,
    recusalCount:recusals.size,
    founderNote:isAdmin(r)?d.founderNote||"":"",
@@ -322,44 +353,115 @@ exports.recuse=onCall(opts,async r=>{
  const id=str(r.data?.entryId,140),reason=str(r.data?.reason,400);
  if(reason.length<5)err("Provide a brief reason for recusal.");
  const ref=db.collection("entries").doc(id);
- if(!(await ref.get()).exists)throw new HttpsError("not-found","Entry not found.");
- await ref.collection("recusals").doc(r.auth.uid).set({reason,uid:r.auth.uid,at:stamp()});
- await ref.collection("reviews").doc(r.auth.uid).delete();
- await audit("reviewer_recused",id,r.auth.uid);
+ await db.runTransaction(async tx=>{
+  const snap=await tx.get(ref);
+  if(!snap.exists)throw new HttpsError("not-found","Entry not found.");
+  if(entryClosed(snap.get("status")))throw new HttpsError("failed-precondition","Entry is not open for review.");
+  tx.set(ref.collection("recusals").doc(r.auth.uid),{reason,uid:r.auth.uid,at:stamp()});
+  tx.delete(ref.collection("reviews").doc(r.auth.uid));
+  tx.update(ref,{lastUpdatedAt:stamp()});
+  tx.create(db.collection("auditLogs").doc(),{action:"reviewer_recused",entryId:id,actorUid:r.auth.uid,at:stamp()});
+ });
  return {ok:true};
 });
 exports.recordReview=onCall(opts,async r=>{
  staff(r);
  const id=str(r.data?.entryId,140),ref=db.collection("entries").doc(id);
- const snap=await ref.get();
- if(!snap.exists)throw new HttpsError("not-found","Entry not found.");
- if((await ref.collection("recusals").doc(r.auth.uid).get()).exists)throw new HttpsError("permission-denied","You are recused.");
- if(["selected","not_selected","merged","withdrawn"].includes(snap.get("status")))throw new HttpsError("failed-precondition","Entry is not open for review.");
  const scores=r.data?.scores||{},max={character:30,perseverance:25,service:20,leadership:15,potential:10},out={};
  for(const [k,m] of Object.entries(max)){const n=Number(scores[k]);if(!Number.isInteger(n)||n<0||n>m)err("Invalid score: "+k);out[k]=n;}
  const recommend=str(r.data?.recommend,20);
  if(!["select","decline","discuss"].includes(recommend))err("Select a recommendation.");
- const existingReviews=await ref.collection("reviews").get();
- if(existingReviews.size>=5&&!existingReviews.docs.some(x=>x.id===r.auth.uid))
-  throw new HttpsError("failed-precondition","The committee already has five reviews.");
- await ref.collection("reviews").doc(r.auth.uid).set({
-  uid:r.auth.uid,scores:out,total:Object.values(out).reduce((a,b)=>a+b,0),
-  recommend,notes:str(r.data?.notes,2400),submittedAt:stamp()
+ const recusal=ref.collection("recusals").doc(r.auth.uid);
+ const review=ref.collection("reviews").doc(r.auth.uid);
+ await db.runTransaction(async tx=>{
+  const [snap,recused,existingReviews]=await Promise.all([tx.get(ref),tx.get(recusal),tx.get(ref.collection("reviews"))]);
+  if(!snap.exists)throw new HttpsError("not-found","Entry not found.");
+  if(recused.exists)throw new HttpsError("permission-denied","You are recused.");
+  if(entryClosed(snap.get("status")))throw new HttpsError("failed-precondition","Entry is not open for review.");
+  if(existingReviews.size>=5&&!existingReviews.docs.some(x=>x.id===r.auth.uid))
+   throw new HttpsError("failed-precondition","The committee already has five reviews.");
+  tx.set(review,{uid:r.auth.uid,scores:out,total:Object.values(out).reduce((a,b)=>a+b,0),
+   recommend,notes:str(r.data?.notes,2400),submittedAt:stamp()});
+  tx.update(ref,{lastUpdatedAt:stamp()});
+  tx.create(db.collection("auditLogs").doc(),{action:"committee_review",entryId:id,actorUid:r.auth.uid,at:stamp()});
  });
- await audit("committee_review",id,r.auth.uid);
  return {ok:true};
 });
+const reviewStages=["submitted","screening","under_review","finalist"];
+function requireSelectionRequirements(entry){
+ if(entry.entryKeyHash&&!entry.nominationFollowUp?.requestedAt)
+  throw new HttpsError("failed-precondition","The nominee must connect their Entry Key and submit their follow-up details first.");
+ if(!entry.verifiedEligibility)throw new HttpsError("failed-precondition","Eligibility must be verified first.");
+ if((entry.referenceCount||0)<2)throw new HttpsError("failed-precondition","Two verified references are required.");
+ if(entry.ageBand!=="adult"&&entry.guardianStatus!=="verified")
+  throw new HttpsError("failed-precondition","Guardian consent must be verified.");
+}
 exports.setEligibility=onCall(opts,async r=>{
  owner(r);
  const id=str(r.data?.entryId,140),eligible=r.data?.eligible===true;
- const ref=db.collection("entries").doc(id),s=await ref.get();
- if(!s.exists)throw new HttpsError("not-found","Entry not found.");
- if(eligible&&(!Number.isFinite(s.get("gpa"))||s.get("gpa")<2.5))
+ if(!id||id.includes("/"))err("Choose an entry.");
+ const ref=db.collection("entries").doc(id);
+ await db.runTransaction(async tx=>{
+  const [s,recusal]=await Promise.all([tx.get(ref),tx.get(ref.collection("recusals").doc(r.auth.uid))]);
+  if(!s.exists)throw new HttpsError("not-found","Entry not found.");
+  if(recusal.exists)throw new HttpsError("permission-denied","You recused yourself from this entry.");
+  if(entryClosed(s.get("status")))throw new HttpsError("failed-precondition","Entry is no longer open for decisions.");
+  if(r.data?.fromStatus&&r.data.fromStatus!==s.get("status"))
+   throw new HttpsError("failed-precondition","The stage changed. Reload the selection file and try again.");
+  if(eligible&&r.data?.fromStatus==="submitted")
+   throw new HttpsError("failed-precondition","Start eligibility screening first.");
+  if(eligible&&(!Number.isFinite(s.get("gpa"))||s.get("gpa")<2.5))
    throw new HttpsError("failed-precondition","Verify an unweighted GPA of at least 2.5 before approving eligibility.");
- if(["selected","not_selected","merged","withdrawn"].includes(s.get("status")))throw new HttpsError("failed-precondition","Entry is no longer open for decisions.");
- await ref.update({verifiedEligibility:eligible,eligibilityNote:str(r.data?.notes,1000),status:eligible?"under_review":"screening",lastUpdatedAt:stamp()});
- await audit("eligibility_review",id,r.auth.uid,{eligible});
+  const status=s.get("status"),notes=str(r.data?.notes,1000);
+  const next=eligible?(status==="finalist"?"finalist":"under_review"):"screening";
+  tx.update(ref,{verifiedEligibility:eligible,eligibilityNote:notes,status:next,lastUpdatedAt:stamp(),
+   ...(next==="screening"?{finalistAt:null}:{})});
+  tx.create(db.collection("auditLogs").doc(),{action:"eligibility_review",entryId:id,actorUid:r.auth.uid,at:stamp(),
+   eligible,fromStatus:status,toStatus:next});
+ });
  return {ok:true};
+});
+exports.moveSelectionStage=onCall(opts,async r=>{
+ owner(r);
+ const id=str(r.data?.entryId,140),from=str(r.data?.fromStatus,20),to=str(r.data?.toStatus,20);
+ const reason=str(r.data?.reason,600);
+ if(!id||id.includes("/")||!reviewStages.includes(to))err("Choose an entry and a valid stage.");
+ const ref=db.collection("entries").doc(id);
+ return db.runTransaction(async tx=>{
+  const [snapshot,recusal]=await Promise.all([tx.get(ref),tx.get(ref.collection("recusals").doc(r.auth.uid))]);
+  if(!snapshot.exists)throw new HttpsError("not-found","Entry not found.");
+  if(recusal.exists)throw new HttpsError("permission-denied","You recused yourself from this entry.");
+  const entry=snapshot.data();
+  if(entry.status!==from)throw new HttpsError("failed-precondition","The stage changed. Reload the selection file and try again.");
+  const finalized=from==="selected"||from==="not_selected";
+  const formerStage=from==="selected"?"finalist":
+   reviewStages.includes(entry.decisionFromStatus)?entry.decisionFromStatus:entry.verifiedEligibility?"under_review":"screening";
+  const step=reviewStages.indexOf(to)-reviewStages.indexOf(from);
+  if(finalized){
+   if(to!==formerStage)err("Reopen the entry at its previous review stage.");
+   if(reason.length<5)err("Enter a reason for reopening the decision.");
+  }else if(!reviewStages.includes(from)||Math.abs(step)!==1){
+   err("Move to the next or previous review stage.");
+  }
+  if(to==="under_review"&&step===1)
+   throw new HttpsError("failed-precondition","Use eligibility verification to advance into committee review.");
+  if(to==="finalist"&&from==="under_review")requireSelectionRequirements(entry);
+  const changes={status:to,lastUpdatedAt:stamp()};
+  if(to==="finalist")changes.finalistAt=entry.finalistAt||stamp();
+  if(to!=="finalist")changes.finalistAt=null;
+  if(to==="screening"||to==="submitted")changes.verifiedEligibility=false;
+  if(finalized)Object.assign(changes,{decision:null,decisionMethod:null,decisionFromStatus:null,
+   decidedBy:null,selectedAt:null,publicId:null,scholarAccepted:false,publicityConsent:false});
+  if(from==="selected"){
+   const lock=db.collection("programSettings").doc(entry.cycle||cycle);
+   await tx.get(lock);
+   tx.set(lock,{scholarRosterVersion:admin.firestore.FieldValue.increment(1)},{merge:true});
+  }
+  tx.update(ref,changes);
+  tx.create(db.collection("auditLogs").doc(),{action:"selection_stage_changed",entryId:id,actorUid:r.auth.uid,at:stamp(),
+   fromStatus:from,toStatus:to,reason});
+  return {ok:true,status:to};
+ });
 });
 exports.createInvitation=onCall(opts,async r=>{
  owner(r);
@@ -465,24 +567,28 @@ exports.verifyRequirement=onCall(opts,async r=>{
  owner(r);
  const id=str(r.data?.entryId,140),kind=str(r.data?.kind,20),slot=Number(r.data?.slot);
  if(!["guardian","reference"].includes(kind))err("Invalid requirement.");
- const entry=db.collection("entries").doc(id),s=await entry.get();
- if(!s.exists)throw new HttpsError("not-found","Entry not found.");
- if(kind==="reference"){
-  if(![0,1].includes(slot))err("Invalid reference.");
-  const doc=entry.collection("references").doc(String(slot)),rs=await doc.get();
-  if(!rs.exists)throw new HttpsError("failed-precondition","Reference not submitted.");
-  const other=await entry.collection("references").doc(String(1-slot)).get();
-  if(other.get("verified")===true&&other.get("recipientEmail")===rs.get("recipientEmail"))
-   throw new HttpsError("failed-precondition","The two verified references must come from different people.");
-  await doc.update({verified:true,verifiedBy:r.auth.uid,verifiedAt:stamp()});
-  const both=await entry.collection("references").get();
-  const count=both.docs.filter(x=>x.id==="0"||x.id==="1").filter(x=>x.get("verified")===true||x.id===String(slot)).length;
-  await entry.update({referenceCount:count,referenceStatus:count>=2?"verified":"pending"});
- }else{
-  if(!s.get("guardianRecord")?.consent)throw new HttpsError("failed-precondition","Guardian has not signed.");
-  await entry.update({"guardianRecord.verified":true,"guardianRecord.verifiedBy":r.auth.uid,guardianStatus:"verified"});
- }
- await audit("requirement_verified",id,r.auth.uid,{kind,slot});
+ if(kind==="reference"&&![0,1].includes(slot))err("Invalid reference.");
+ const entry=db.collection("entries").doc(id);
+ await db.runTransaction(async tx=>{
+  const s=await tx.get(entry);
+  if(!s.exists)throw new HttpsError("not-found","Entry not found.");
+  if(entryClosed(s.get("status")))throw new HttpsError("failed-precondition","Entry is closed.");
+  if(kind==="reference"){
+   const doc=entry.collection("references").doc(String(slot));
+   const [rs,other]=await Promise.all([tx.get(doc),tx.get(entry.collection("references").doc(String(1-slot)))]);
+   if(!rs.exists)throw new HttpsError("failed-precondition","Reference not submitted.");
+   if(other.get("verified")===true&&other.get("recipientEmail")===rs.get("recipientEmail"))
+    throw new HttpsError("failed-precondition","The two verified references must come from different people.");
+   const count=other.get("verified")===true?2:1;
+   tx.update(doc,{verified:true,verifiedBy:r.auth.uid,verifiedAt:stamp()});
+   tx.update(entry,{referenceCount:count,referenceStatus:count===2?"verified":"pending",lastUpdatedAt:stamp()});
+  }else{
+   if(!s.get("guardianRecord")?.consent)throw new HttpsError("failed-precondition","Guardian has not signed.");
+   tx.update(entry,{"guardianRecord.verified":true,"guardianRecord.verifiedBy":r.auth.uid,guardianStatus:"verified",lastUpdatedAt:stamp()});
+  }
+  tx.create(db.collection("auditLogs").doc(),{action:"requirement_verified",entryId:id,actorUid:r.auth.uid,at:stamp(),kind,
+   slot:kind==="reference"?slot:null});
+ });
  return {ok:true};
 });
 exports.finalizeDecision=onCall(opts,async r=>{
@@ -498,11 +604,13 @@ exports.finalizeDecision=onCall(opts,async r=>{
   if(!snap.exists)throw new HttpsError("not-found","Entry not found.");
   const d=snap.data();
   if(entryClosed(d.status))throw new HttpsError("failed-precondition","Entry cannot be finalized.");
-  if(decision==="select"&&d.entryKeyHash&&!d.nominationFollowUp?.requestedAt)
-   throw new HttpsError("failed-precondition","The nominee must connect their Entry Key and submit their follow-up details first.");
+  if(r.data?.fromStatus&&r.data.fromStatus!==d.status)
+   throw new HttpsError("failed-precondition","The stage changed. Reload the selection file and try again.");
   if(!d.verifiedEligibility)throw new HttpsError("failed-precondition","Eligibility must be verified first.");
-  if(decision==="select"&&(d.referenceCount||0)<2)throw new HttpsError("failed-precondition","Two verified references are required.");
-  if(decision==="select"&&d.ageBand!=="adult"&&d.guardianStatus!=="verified")throw new HttpsError("failed-precondition","Guardian consent must be verified.");
+  if(decision==="select"){
+   if(d.status!=="finalist")throw new HttpsError("failed-precondition","Advance this student to Finalist before selecting a Beacon Scholar.");
+   requireSelectionRequirements(d);
+  }
   const [votes,recusal]=await Promise.all([
    tx.get(entry.collection("reviews")),tx.get(entry.collection("recusals").doc(r.auth.uid))
   ]);
@@ -517,8 +625,17 @@ exports.finalizeDecision=onCall(opts,async r=>{
    if(decision==="select"&&votes.docs.filter(vote=>vote.get("recommend")==="select").length<2)
     throw new HttpsError("failed-precondition","Selection needs at least two favorable recommendations.");
   }
-  const selected=decision==="select",publicId=selected?"BCN-"+cycle+"-"+id.slice(0,8).toUpperCase():null;
-  tx.update(entry,{status:selected?"selected":"not_selected",decision,decisionMethod:method,decidedBy:r.auth.uid,
+  const selected=decision==="select",entryCycle=d.cycle||cycle;
+  if(selected&&entryCycle===cycle){
+   const lock=intakeRef;
+   // Serialize roster changes, including when the selected-entries query is empty.
+   await tx.get(lock);
+   const scholars=await tx.get(db.collection("entries").where("status","==","selected").where("cycle","==",entryCycle).limit(2));
+   if(scholars.size>=2)throw new HttpsError("failed-precondition","Two Beacon Scholars have already been selected for this class.");
+   tx.set(lock,{scholarRosterVersion:admin.firestore.FieldValue.increment(1)},{merge:true});
+  }
+  const publicId=selected?"BCN-"+entryCycle+"-"+id.slice(0,8).toUpperCase():null;
+  tx.update(entry,{status:selected?"selected":"not_selected",decision,decisionFromStatus:d.status,decisionMethod:method,decidedBy:r.auth.uid,
    selectedAt:selected?stamp():null,publicId,founderNote:selected?note:"",lastUpdatedAt:stamp()});
   tx.create(db.collection("auditLogs").doc(),{
    action:"decision_finalized",entryId:id,actorUid:r.auth.uid,at:stamp(),decision,decisionMethod:method,reviewCount:votes.size
@@ -571,21 +688,26 @@ exports.updateEntryContacts=onCall(opts,async r=>{
  if(refsChanged){changes.referenceCount=0;changes.referenceStatus="pending";}
  if("gpa" in changes&&changes.gpa!==original.gpa)changes.verifiedEligibility=false;
  if("ageBand" in changes&&changes.ageBand!==original.ageBand)changes.verifiedEligibility=false;
- await ref.update(changes);
- if(refsChanged){
-   const old=await ref.collection("references").get();
-   await Promise.all(old.docs.map(x=>x.ref.delete()));
- }
- if(guardianChanged||refsChanged||applicantChanged){
-  const oldInvites=await db.collection("invitations").where("entryId","==",id).limit(100).get();
-  const revokes=oldInvites.docs.filter(x=>x.get("status")==="pending"&&(
-   (guardianChanged&&x.get("kind")==="guardian")||
-   (refsChanged&&x.get("kind")==="reference")||
-   (applicantChanged&&x.get("kind")==="scholar")
-  ));
-  await Promise.all(revokes.map(x=>x.ref.update({status:"revoked",revokedAt:stamp()})));
- }
- await audit("admin_contact_update",id,r.auth.uid,{fields:Object.keys(changes).filter(k=>k!=="lastUpdatedAt")});
+ await db.runTransaction(async tx=>{
+  const current=await tx.get(ref);
+  if(!current.exists||entryClosed(current.get("status")))
+   throw new HttpsError("failed-precondition","Entry is closed.");
+  if(!current.updateTime.isEqual(snap.updateTime))
+   throw new HttpsError("failed-precondition","The selection file changed. Reload it and try again.");
+  const old=refsChanged?await tx.get(ref.collection("references")):null;
+  const invites=guardianChanged||refsChanged||applicantChanged
+   ?await tx.get(db.collection("invitations").where("entryId","==",id).limit(100)):null;
+  tx.update(ref,changes);
+  for(const reference of old?.docs||[])tx.delete(reference.ref);
+  for(const invite of invites?.docs||[]){
+   const kind=invite.get("kind");
+   if(invite.get("status")==="pending"&&((guardianChanged&&kind==="guardian")||
+     (refsChanged&&kind==="reference")||(applicantChanged&&kind==="scholar")))
+    tx.update(invite.ref,{status:"revoked",revokedAt:stamp()});
+  }
+  tx.create(db.collection("auditLogs").doc(),{action:"admin_contact_update",entryId:id,actorUid:r.auth.uid,at:stamp(),
+   fields:Object.keys(changes).filter(k=>k!=="lastUpdatedAt")});
+ });
  return {ok:true};
 });
 exports.useVerifiedNominatorReference=onCall(opts,async r=>{
@@ -785,12 +907,15 @@ exports.verifyMilestone=onCall(opts,async r=>{
 });
 exports.withdrawApplication=onCall(opts,async r=>{
  requireAuth(r);
- const id=str(r.data?.entryId,140),ref=db.collection("entries").doc(id),s=await ref.get();
- if(!s.exists||s.get("applicantUid")!==r.auth.uid)throw new HttpsError("permission-denied","Not your application.");
- if(["selected","not_selected"].includes(s.get("status")))
-  throw new HttpsError("failed-precondition","Contact Beacon to request a records or recognition review.");
- await ref.update({status:"withdrawn",withdrawnAt:stamp(),lastUpdatedAt:stamp()});
- await audit("application_withdrawn",id,r.auth.uid);
+ const id=str(r.data?.entryId,140),ref=db.collection("entries").doc(id);
+ await db.runTransaction(async tx=>{
+  const s=await tx.get(ref);
+  if(!s.exists||s.get("applicantUid")!==r.auth.uid)throw new HttpsError("permission-denied","Not your application.");
+  if(entryClosed(s.get("status")))
+   throw new HttpsError("failed-precondition","Contact Beacon to request a records or recognition review.");
+  tx.update(ref,{status:"withdrawn",withdrawnAt:stamp(),lastUpdatedAt:stamp()});
+  tx.create(db.collection("auditLogs").doc(),{action:"application_withdrawn",entryId:id,actorUid:r.auth.uid,at:stamp()});
+ });
  return {ok:true};
 });
 
@@ -798,28 +923,33 @@ exports.revokeGuardianConsent=onCall(opts,async r=>{
  owner(r);
  const entryId=str(r.data?.entryId,140),reason=str(r.data?.reason,600);
  if(reason.length<8)err("Provide a documented reason for guardian consent withdrawal.");
- const ref=db.collection("entries").doc(entryId),snap=await ref.get();
- if(!snap.exists)throw new HttpsError("not-found","Entry not found.");
- if(snap.get("status")==="selected")throw new HttpsError("failed-precondition","Recognition was already finalized; initiate a formal privacy review instead.");
- await ref.update({guardianStatus:"withdrawn",lastUpdatedAt:stamp(),
+ const ref=db.collection("entries").doc(entryId);
+ await db.runTransaction(async tx=>{
+  const snap=await tx.get(ref);
+  if(!snap.exists)throw new HttpsError("not-found","Entry not found.");
+  if(snap.get("status")==="selected")throw new HttpsError("failed-precondition","Recognition was already finalized; initiate a formal privacy review instead.");
+  tx.update(ref,{guardianStatus:"withdrawn",lastUpdatedAt:stamp(),
    "guardianRecord.verified":false,consentWithdrawal:{reason,recordedBy:r.auth.uid,at:new Date().toISOString()}});
- await audit("guardian_consent_withdrawn",entryId,r.auth.uid,{reason});
+  tx.create(db.collection("auditLogs").doc(),{action:"guardian_consent_withdrawn",entryId,actorUid:r.auth.uid,at:stamp(),reason});
+ });
  return {ok:true};
 });
 exports.invalidateReference=onCall(opts,async r=>{
  owner(r);
  const entryId=str(r.data?.entryId,140),slot=Number(r.data?.slot),reason=str(r.data?.reason,600);
  if(![0,1].includes(slot)||reason.length<8)err("Choose reference 1 or 2 and explain the problem.");
- const ref=db.collection("entries").doc(entryId),snap=await ref.get();
- if(!snap.exists)throw new HttpsError("not-found","Entry not found.");
- if(snap.get("status")==="selected")throw new HttpsError("failed-precondition","Recognition finalized; initiate formal review.");
- const doc=ref.collection("references").doc(String(slot)),d=await doc.get();
- if(!d.exists)throw new HttpsError("not-found","Reference does not exist.");
- await doc.update({verified:false,invalidReason:reason,invalidatedBy:r.auth.uid,invalidatedAt:stamp()});
- const other=await ref.collection("references").get();
- const count=other.docs.filter(x=>x.id!==String(slot)&&x.get("verified")===true).length;
- await ref.update({referenceCount:count,referenceStatus:count>=2?"verified":"pending",lastUpdatedAt:stamp()});
- await audit("reference_invalidated",entryId,r.auth.uid,{slot,reason});
+ const ref=db.collection("entries").doc(entryId);
+ const reference=ref.collection("references").doc(String(slot));
+ const other=ref.collection("references").doc(String(1-slot));
+ await db.runTransaction(async tx=>{
+  const [snap,current,remaining]=await Promise.all([tx.get(ref),tx.get(reference),tx.get(other)]);
+  if(!snap.exists)throw new HttpsError("not-found","Entry not found.");
+  if(snap.get("status")==="selected")throw new HttpsError("failed-precondition","Recognition finalized; initiate formal review.");
+  if(!current.exists)throw new HttpsError("not-found","Reference does not exist.");
+  tx.update(reference,{verified:false,invalidReason:reason,invalidatedBy:r.auth.uid,invalidatedAt:stamp()});
+  tx.update(ref,{referenceCount:remaining.get("verified")===true?1:0,referenceStatus:"pending",lastUpdatedAt:stamp()});
+  tx.create(db.collection("auditLogs").doc(),{action:"reference_invalidated",entryId,actorUid:r.auth.uid,at:stamp(),slot,reason});
+ });
  return {ok:true};
 });
 
@@ -842,6 +972,8 @@ exports.mergeNomination=onCall(opts,async r=>{
  await db.runTransaction(async tx=>{
   const [currentSource,currentDestination,old]=await Promise.all([tx.get(sourceRef),tx.get(destRef),tx.get(endorsement)]);
   if(old.exists||currentSource.get("status")==="merged")throw new HttpsError("already-exists","Nomination already merged.");
+  if(!currentSource.exists||!currentDestination.exists||entryClosed(currentSource.get("status"))||entryClosed(currentDestination.get("status")))
+   throw new HttpsError("failed-precondition","Both entries must remain open to merge a nomination.");
   tx.create(endorsement,{
    sourceEntryId:sourceId,statement:source.personalStatement,
    privacy:source.privacy||"confidential",nominator:source.nominator||null,

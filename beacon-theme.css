@@ -311,7 +311,11 @@ input::placeholder,textarea::placeholder{color:#938577}
 .workspace-view .field-grid label + label,
 .workspace-view .privacy-options label + label { margin-top: 0; }
 .review-shortcuts {
+  position: static;
   display: flex;
+  align-items: center;
+  flex-direction: row;
+  background: transparent;
   flex-wrap: wrap;
   gap: .2rem 1rem;
   border-top: 1px solid var(--workspace-line);
@@ -425,4 +429,58 @@ input::placeholder,textarea::placeholder{color:#938577}
 @media (max-width: 620px) {
   .home-class .hero-star { font-size: 4rem; top: 36%; }
   .home-class-caption { bottom: 1.1rem; }
+}
+
+.beacon-purpose {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+  gap: clamp(1rem, 4vw, 3rem);
+  align-items: center;
+}
+.beacon-purpose .workspace-card h3 { margin-top: 0; }
+.guide-section { margin: 2.5rem 0; }
+.guide-section > p { max-width: 68ch; }
+.guide-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .75rem 1.5rem; }
+.guide-list > div { border-top: 1px solid var(--line); padding: .85rem 0; }
+.guide-list dt { color: var(--cream); font-weight: 700; }
+.guide-list dd { margin: .3rem 0 0; }
+.deadline-note { font-weight: 600; }
+.deadline-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: .75rem;
+  margin: 1rem 0 .5rem;
+}
+.deadline-form > label { width: min(100%, 15rem); }
+.deadline-form .workspace-actions { margin: 0; }
+.queue-filters { margin-top: 1rem; }
+.selection-results { margin-bottom: .75rem; }
+.stage-track {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: .5rem;
+  margin: .9rem 0;
+  padding: 0;
+  list-style: none;
+}
+.stage-track li {
+  border: 1px solid var(--line);
+  border-radius: .6rem;
+  color: var(--muted);
+  padding: .6rem .65rem;
+  font-size: .82rem;
+  text-align: center;
+}
+.stage-track li[data-state="complete"] { color: var(--cream); background: var(--workspace-inset); }
+.stage-track li[data-state="current"], .workspace-status[data-status="finalist"] {
+  border-color: var(--gold);
+  color: var(--cream);
+  background: rgba(200, 158, 91, .15);
+  font-weight: 700;
+}
+.finalist-notice h3 { margin-top: 0; }
+@media (max-width: 680px) {
+  .beacon-purpose, .guide-list { grid-template-columns: 1fr; }
+  .stage-track { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
