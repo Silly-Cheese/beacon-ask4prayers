@@ -325,10 +325,18 @@ input::placeholder,textarea::placeholder{color:#938577}
 .nomination-entry-key code { font-family: ui-monospace, monospace; letter-spacing: .04em; }
 .follow-up-guardian { min-width: 0; border: 1px solid var(--workspace-line); border-radius: 9px; padding: 1rem; }
 .follow-up-guardian legend { padding: 0 .35rem; font-weight: 650; }
-.nomination-letter-steps { margin: 1rem 0; }
-.nomination-letter-steps h3 { margin: 0 0 .45rem; font-size: 1.25rem; }
-.nomination-letter-steps ol { margin: 0 0 .65rem; padding-left: 1.35rem; }
-.nomination-letter-steps li + li { margin-top: .2rem; }
+.nomination-letter-steps { padding-left: 1.35rem; }
+.nomination-letter-steps li + li { margin-top: .4rem; }
+.nomination-page-footer {
+  display: flex;
+  justify-content: space-between;
+  gap: .4rem;
+  margin-top: 1.4rem;
+  border-top: 1px solid #ae956f;
+  padding-top: .45rem;
+  font-size: .84rem;
+  color: #453a2d;
+}
 .nomination-entry-key {
   display: grid;
   gap: .2rem;
@@ -338,10 +346,14 @@ input::placeholder,textarea::placeholder{color:#938577}
 }
 .nomination-entry-key code { overflow-wrap: anywhere; }
 @media print {
-  #print-document .nomination-letter h2 { font-size: 25pt; margin-bottom: .16in; }
-  #print-document .nomination-letter > p { font-size: 11pt; line-height: 1.42; margin-bottom: .12in; }
-  #print-document .nomination-letter .paper-divider { margin: .13in 0; }
-  #print-document .nomination-letter-steps { font-size: 10.5pt; line-height: 1.35; }
-  #print-document .nomination-letter-steps p { font-size: 10.5pt; line-height: 1.35; margin: .12in 0; }
+  #print-document .nomination-page + .nomination-page { break-before: page; }
+  #print-document .nomination-page h2 { font-size: 28pt; margin-bottom: .24in; }
+  #print-document .nomination-page h3 {
+    font-size: 15pt;
+    margin: .24in 0 .08in;
+    break-after: avoid;
+  }
+  #print-document .nomination-letter-steps { font-size: 11.5pt; line-height: 1.5; margin: .15in 0 .22in; }
   #print-document .nomination-entry-key { break-inside: avoid; }
+  #print-document .nomination-page-footer { break-inside: avoid; }
 }

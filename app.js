@@ -620,36 +620,63 @@ function congratulationsLetter(record){
  return studentLetter("Congratulations, Beacon Scholar",record.recognitionName||record.studentName,paragraphs,"With sincere congratulations,",footer);
 }
 function nominationLetter(record,entryKey,includeFollowUp){
- const paragraphs=[
-  "Congratulations on being nominated for Beacon Scholars. Someone had the opportunity to put a student forward for this recognition, and they thought of you. They took the time to tell us that your character and the difference you make in your community are worth recognizing.",
-  "I hope you take a moment to be proud of that. So much of what matters happens in ordinary moments: keeping your word, showing kindness, taking responsibility, or continuing when things get hard. To have someone see promise in you and put your name forward is an honor in its own right.",
- ];
- if(includeFollowUp)paragraphs.push("Your nomination is already your official entry. If you would like to continue, follow the steps below. Beacon will use your follow-up to request the required forms and confirm eligibility.");
- const closing="With warm congratulations,";
- const sheet=studentLetter("Congratulations on your Beacon nomination",record.studentName,paragraphs,closing,"Beacon Scholars · Class of "+record.cycle);
- sheet.classList.add("nomination-letter");
- if(!includeFollowUp)return sheet;
- const next=el("section",undefined,"nomination-letter-steps");
- next.append(el("h3","Continue your nomination"));
- const steps=el("ol");
+ const packet=el("div",undefined,"nomination-packet");
+ const pageCount=includeFollowUp?3:2;
+ const footer="Beacon Scholars · Class of "+record.cycle;
+ const addPage=(title,page)=>{
+  const sheet=el("article",undefined,"paper-document student-letter nomination-page");
+  sheet.append(el("div","THE PRAYER PROJECT • BEACON SCHOLARS","paper-kicker"),
+   el("div",undefined,"paper-divider"),el("h2",title));
+  const pageFooter=el("footer",undefined,"nomination-page-footer");
+  pageFooter.append(el("small",footer+" · beacon.ask4prayers.com"),el("small",page+" / "+pageCount));
+  sheet.append(pageFooter);packet.append(sheet);
+  return pageFooter;
+ };
+ const letter=studentLetter("Congratulations on your Beacon nomination",record.studentName,[
+  "Someone in your community had the opportunity to put a student forward for Beacon Scholars, and they thought of you. They took the time to tell us that your character, your promise, and the way you show up for others deserve to be recognized. That is a meaningful accomplishment. I hope you take a moment to be proud of it.",
+  "Often, the choices that leave the deepest impression happen in ordinary moments. You keep a commitment when it would be easier to let it go. You make room for someone who feels left out. You keep learning and growing through a difficult season. Those choices can matter to people long before you realize anyone has noticed them.",
+  "Your nomination means that someone noticed enough to put your name forward. There is real honor in being thought of that way. I hope this letter gives you something you can return to on a difficult day: someone saw good in you and believed it was worth telling us about.",
+  "Thank you for the ways you are already making a difference. I am glad that we have the opportunity to celebrate your nomination."
+ ],"With warm congratulations,",footer);
+ letter.classList.add("nomination-page");
+ letter.lastElementChild.replaceWith(el("footer",footer+" · beacon.ask4prayers.com · 1 / "+pageCount,"nomination-page-footer"));
+ packet.append(letter);
+
+ const about=addPage("What it means to be a Beacon Scholar",2);
+ about.before(
+  el("h3","Why Beacon exists"),
+  el("p","Beacon Scholars is an honorary recognition program of The Prayer Project. We created it to recognize qualities that can be easy to overlook: integrity, perseverance, compassion, growth, and the willingness to use your abilities for the good of others. Students show those qualities at home, at school, at work, and in their communities. They deserve to be seen in all of those places."),
+  el("p","Sometimes the clearest example of leadership is a student who notices what needs to be done and quietly does it. Sometimes perseverance looks like showing up again after a hard week. We consider how students treat people, what they have learned from the responsibilities they carry, and the kind of difference they hope to make."),
+  el("h3","What the honor includes"),
+  el("p","Beacon is an honorary distinction. This inaugural cycle carries no financial award. Each selected Scholar receives an official letter and certificate recognizing the character and promise that led to their selection. We want each student to have a lasting record of the qualities someone saw in them."),
+  el("h3","Two students in the inaugural class"),
+  el("p","Beacon Scholars is a new program, and only two students will be selected for our inaugural class. Every nomination is an honor in itself. The final selection identifies the two students who will receive the formal distinction this cycle.")
+ );
+ if(!includeFollowUp)return packet;
+
+ const next=addPage("Continue your nomination",3);
+ next.before(el("p","Your nomination is already your official entry. If you would like to continue, follow the steps below."));
+ const steps=el("ol",undefined,"nomination-letter-steps");
  const instructions=[
   entryKey?"Visit beacon.ask4prayers.com/#claim. Sign in or create a student account and verify your email.":"Sign in to Beacon and open My Dashboard.",
-  entryKey?"Enter the private Entry Key below.":"Open the nomination already linked to your account.",
+  entryKey?"Enter the private Entry Key below to connect the nomination to your account.":"Open the nomination already linked to your account.",
   "In My Dashboard, open your nomination and add one academic reference and one character reference. Skip any reference already received.",
-  "If you’re under 18, enter your parent or guardian’s name and email to request a consent form.",
+  "If you’re under 18, enter your parent or guardian’s name and email to request a consent form. They complete that form separately.",
   "Submit your follow-up and check My Dashboard for updates."
  ];
  instructions.forEach(instruction=>steps.append(el("li",instruction)));
- next.append(steps);
+ next.before(steps);
  if(entryKey){
   const expires=new Date(entryKey.expiresAt).toLocaleDateString("en-US",{dateStyle:"long",timeZone:"America/Chicago"});
   const key=el("div",undefined,"nomination-entry-key");
   key.append(el("strong","Your private Entry Key"),el("code",entryKey.key),el("small","Use by "+expires+". Keep this key private."));
-  next.append(key);
+  next.before(key);
  }
- next.append(el("p","The committee reviews eligibility and completed references and, for students under 18, verified guardian consent before making its decision."));
- qs(".letter-closing",sheet).before(next);
- return sheet;
+ next.before(
+  el("h3","What happens next"),
+  el("p","Beacon confirms eligibility and follows up with your references. For students under 18, the team also verifies parent or guardian consent. The selection decision follows that review.")
+ );
+ return packet;
 }
 function committeeLetterActions(record){
  if(!record.canManage)return null;
