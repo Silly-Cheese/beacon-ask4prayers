@@ -94,3 +94,31 @@ input::placeholder,textarea::placeholder{color:#938577}
   overflow-wrap: anywhere;
   user-select: all;
 }
+
+.intake-details summary {
+  cursor: pointer;
+  color: var(--gold);
+  font-weight: 600;
+}
+.intake-details[open] summary {
+  margin-bottom: 1rem;
+}
+.intake-subsection {
+  border-top: 1px solid var(--line);
+  margin-top: 1.5rem;
+  padding-top: .75rem;
+}
+.intake-error {
+  margin: 0;
+  color: #f0aea7;
+}
+.intake-controls {
+  margin: 0 0 1.5rem;
+}
+.intake-controls h2 {
+  margin-top: 0;
+}
+
+#student-form {
+  scroll-margin-top: 7rem;
+}

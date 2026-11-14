@@ -1,40 +1,32 @@
-# Launch Beacon Scholars intake
+# Deploy Beacon Scholars
 
-GitHub Pages serves [Beacon Scholars](https://beacon.ask4prayers.com/) from the repository’s `main` branch and root folder. Firebase project `beacon-ask4prayers` supplies Authentication, Cloud Functions and Firestore. The same server flag opens both applications and nominations for the Class of 2027. Set it back to `false` and redeploy Functions to pause both paths.
+The public website is hosted on GitHub Pages from `main`. The PowerShell script below deploys the Firebase backend to `beacon-ask4prayers` and prints the live intake status.
 
-## Firebase setup
+## Deploy from PowerShell
 
-- In [Firebase Authentication](https://console.firebase.google.com/project/beacon-ask4prayers/authentication/providers), enable Email/Password for applicants and named or confidential nominators, and Anonymous for anonymous nominations. Authorize `beacon.ask4prayers.com` for Auth.
-- Ensure the Firestore database exists. Use the existing Firebase custom claims to assign a program administrator and the selection committee. The administrator can issue private guardian and reference links for manual delivery or queue them through the configured Trigger Email extension.
-
-## Deploy and open
-
-From the repository root in PowerShell:
+Open the `beacon-ask4prayers` repository folder. Use Node.js 22 and sign in to the Firebase CLI once with the Google account that manages the project.
 
 ```powershell
 npx.cmd --yes firebase-tools@latest login
-npm.cmd --prefix functions install
 ```
 
-Set `BEACON_INTAKE_OPEN=true` in `functions/.env.beacon-ask4prayers` (or in your existing `functions/.env` if that is where you manage production settings). Keep any existing mail setting and other Firebase configuration in the same file. To pause intake while validating production, deploy first with the value `false` and repeat with `true` when ready.
+For the first deployment and future backend updates, run these two lines from the repo root. The process-scoped execution policy applies only to the PowerShell process that runs this script.
 
 ```powershell
-npx.cmd --yes firebase-tools@latest deploy --project beacon-ask4prayers --only "functions,firestore:rules"
+git pull --ff-only origin main
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\deploy-beacon.ps1
 ```
 
-Storage is unused by intake. GitHub Pages publishes the frontend.
+If deployment fails, follow the Firebase CLI message. The project needs a Firestore database and the Blaze plan to deploy Cloud Functions. Under [Authentication](https://console.firebase.google.com/project/beacon-ask4prayers/authentication/providers), enable Email/Password for Beacon accounts and Anonymous for anonymous nominations. Add `beacon.ask4prayers.com` to [Authorized domains](https://console.firebase.google.com/project/beacon-ask4prayers/authentication/settings).
 
-## Verify production
+## Open or close entries
 
-Call the public status endpoint from PowerShell:
+Sign in as a Beacon administrator and open the [Committee page](https://beacon.ask4prayers.com/#committee). At the top, select **Open applications and nominations** or **Close applications and nominations**. Changes take effect without a deployment. Both forms share this setting. Existing entries stay in the review queue.
 
-```powershell
-Invoke-RestMethod -Method Post `
-  -Uri 'https://us-central1-beacon-ask4prayers.cloudfunctions.net/getProgramSettings' `
-  -ContentType 'application/json' -Body '{"data":{}}' |
-  Select-Object -ExpandProperty result
-```
+Intake starts closed on a fresh deployment. If a prior deployment set `BEACON_INTAKE_OPEN`, that value carries forward until an administrator uses the Committee control. After the first change in the Committee page, the saved website setting takes precedence.
 
-Expect `cycle: 2027`, `intakeOpen: True`, and `honoraryOnly: True` after launch. On the live site, verify that both entry pages show as open. Use fictional data to test a verified student saving and submitting, an anonymous nomination, and a named nomination after sign-in. Confirm each receipt appears in the committee queue, then verify a private guardian and reference invitation through completion. Reviewers should see reference responses without names, signatures, email addresses or confidential nominator records.
+## Review entries
 
-If the status endpoint returns 404, check that `getProgramSettings` appears under Functions in the correct project and region. If the status is open but submissions fail, check the relevant Auth provider and the deployed Functions logs.
+Reviewers create a Beacon account using the email address that the administrator will authorize. Use the Firebase Admin SDK credentials and role commands described in [IMPLEMENTATION.md](IMPLEMENTATION.md). After the role is granted, the reviewer signs out and back in, then goes to [Committee](https://beacon.ask4prayers.com/#committee) and selects **Open Selection File**.
+
+After opening entries, submit a fictional application and nomination and confirm each receipt appears in the Committee queue. Administrators can issue guardian and reference invitations there. Links can be delivered manually or queued by a configured Firebase Trigger Email extension.

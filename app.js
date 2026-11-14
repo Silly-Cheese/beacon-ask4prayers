@@ -9,7 +9,8 @@ const PAGE={home:"public-view",mission:"public-view",selection:"public-view",opp
 let currentUser=null,settings={cycle:"2027",intakeOpen:false},intakeState="loading",step=0;
 let draftLoadedFor=null,draftLoading=null,saveTimer=null,savingPromise=null,inviteToken=null,activeScholarId=null;
 let studentBusy=false,nominationBusy=false,nominationRequestId=null,submittedApplication=null,accountReturn="dashboard";
-const stepNames=["Your identity","Academic journey","Service and leadership","Personal essay","Two references","Guardian information","Review and submit"];
+const stepNames=["About you","Your story","References and guardian","Review and submit"];
+const finalStep=stepNames.length-1;
 const timestamp=s=>s?new Date(s).toLocaleDateString():"";
 const escaped=v=>String(v??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 let toastTimeout;
@@ -41,7 +42,7 @@ function route(){
   accountReturn=/^(apply|nominate|dashboard)$|^claim\/[A-Za-z0-9_-]{43}$/.test(target)?target:"dashboard";
   const link=$("account-continue");
   link.href="#"+accountReturn;
-  link.textContent=accountReturn==="apply"?"Continue to your application →":accountReturn==="nominate"?"Return to your nomination →":accountReturn.startsWith("claim/")?"Return to your invitation →":"Open dashboard →";
+  link.textContent=accountReturn==="apply"?"Continue to your application →":accountReturn==="nominate"?"Return to your nomination →":accountReturn.startsWith("claim/")?"Return to your invitation →":accountReturn==="committee"?"Open Committee →":"Open dashboard →";
  }
  inviteToken=(page==="reference"||page==="consent"||page==="claim")?parts.join("/"):null;
  Object.values(PAGE).forEach(id=>{const node=$(id);if(node)node.hidden=true;});
@@ -101,9 +102,7 @@ function refreshGates(){
   panel.inert=studentBusy;
  });
  $("student-prev").disabled=studentBusy;
- const signedEmail=currentUser?.email||"";
- const nomEmail=qs('[name="nominatorEmail"]',$("nomination-form"));
- if(signedEmail)nomEmail.value=signedEmail;
+ nominationPrivacy();
 }
 onAuthStateChanged(auth,async u=>{
  const previousUid=currentUser?.isAnonymous?null:currentUser?.uid;
@@ -111,7 +110,7 @@ onAuthStateChanged(auth,async u=>{
  if(previousUid!==nextUid){
   clearTimeout(saveTimer);draftLoadedFor=null;draftLoading=null;submittedApplication=null;step=0;
   student.reset();$("student-receipt").hidden=true;$("student-receipt").replaceChildren();
-  countEssay();toggleGuardian();updateStep();
+  formError("student");countEssay();toggleGuardian();updateStep();
  }
  currentUser=u;
  refreshGates();
@@ -120,11 +119,26 @@ onAuthStateChanged(auth,async u=>{
  if(location.hash==="#committee")showCommittee();
  if(location.hash==="#scholar")showScholar();
 });
+function updateIntakeStatus(program){
+ settings=program;
+ intakeState=typeof program?.intakeOpen!=="boolean"?"unavailable":program.intakeOpen?"open":"closed";
+ refreshGates();
+}
+function formError(kind,message=""){
+ const error=$(kind+"-form-error");
+ error.textContent=message;
+ error.hidden=!message;
+}
+async function intakeError(kind,error){
+ formError(kind,readable(error));
+ if(error?.code==="functions/failed-precondition"&&error.message==="Applications and nominations are currently closed."){
+  try{updateIntakeStatus(await call("getProgramSettings"));}catch{}
+ }
+}
 async function init(){
  route();
  try{
-  settings=await call("getProgramSettings");
-  intakeState=typeof settings?.intakeOpen!=="boolean"?"unavailable":settings.intakeOpen?"open":"closed";
+  updateIntakeStatus(await call("getProgramSettings"));
  }catch{
   intakeState="unavailable";
  }
@@ -177,6 +191,8 @@ function fillStudent(d){
    if(input)input.value=r[k.toLowerCase()]||"";
   });
  });
+ const optional=qs(".intake-details",student);
+ optional.open=qsa("textarea",optional).some(field=>field.value.trim());
  countEssay();toggleGuardian();
 }
 async function prepareApplication(){
@@ -229,12 +245,12 @@ function showReceipt(kind,entryId,type){
 }
 function updateStep(){
  qsa(".wizard-step",student).forEach((panel,i)=>panel.hidden=i!==step);
- $("student-step-counter").textContent="STEP "+String(step+1).padStart(2,"0")+" / 07 — "+stepNames[step].toUpperCase();
+ $("student-step-counter").textContent="Step "+(step+1)+" of "+stepNames.length;
  $("student-step-progress").replaceChildren(...stepNames.map((_,i)=>{const b=el("span");b.className=i<=step?"done":"";return b;}));
  $("student-prev").hidden=step===0;
- $("student-next").hidden=step===6;
- $("student-submit").hidden=step!==6;
- if(step===6){
+ $("student-next").hidden=step===finalStep;
+ $("student-submit").hidden=step!==finalStep;
+ if(step===finalStep){
   const d=studentFields();
   $("student-review-summary").textContent=[
    "Student: "+(d.studentName||"Not provided"),
@@ -243,6 +259,13 @@ function updateStep(){
    "Guardian: "+(d.ageBand==="minor"?(d.guardianEmail||"Email needed"):"Not required")
   ].join(" • ");
  }
+}
+function focusStudentStep(){
+ updateStep();
+ const legend=qs(".wizard-step:not([hidden]) legend",student);
+ legend.tabIndex=-1;
+ legend.focus({preventScroll:true});
+ student.scrollIntoView({block:"start"});
 }
 function validateStep(index=step){
  const current=qs('.wizard-step[data-step="'+index+'"]',student);
@@ -253,25 +276,34 @@ function validateStep(index=step){
  }
  const fields=studentFields();
  let message="";
- if(index===3&&fields.personalStatement.trim().length<180)message="Your essay needs a little more detail before continuing.";
- if(index===4&&fields.references[0].email.trim().toLowerCase()===fields.references[1].email.trim().toLowerCase())
-  message="Provide two different reference email addresses.";
+ if(index===1&&fields.personalStatement.trim().length<180)message="Your essay needs a little more detail before continuing.";
+ if(index===2){
+  const [academic,character]=fields.references.map(reference=>reference.email.trim().toLowerCase());
+  const account=currentUser?.email?.toLowerCase(),guardian=fields.ageBand==="minor"?fields.guardianEmail.trim().toLowerCase():"";
+  if(academic===character)message="Use different email addresses for your two references.";
+  else if([academic,character].some(email=>email===account||email===guardian))
+   message="Use reference email addresses that differ from yours and your guardian’s.";
+  else if(guardian&&guardian===account)message="Use a separate email address for your guardian.";
+ }
  if(!message)return true;
- step=index;updateStep();notify(message);return false;
+ step=index;updateStep();formError("student",message);return false;
 }
 $("student-next").addEventListener("click",async()=>{
- if(studentBusy||!validateStep())return;
+ if(studentBusy)return;
+ formError("student");
+ if(!validateStep())return;
  studentBusy=true;
  refreshGates();
  try{
   await saveDraft();
-  step=Math.min(6,step+1);updateStep();window.scrollTo({top:130,behavior:"smooth"});
- }catch(e){notify("Save failed: "+readable(e));}
+  step=Math.min(finalStep,step+1);
+  studentBusy=false;refreshGates();focusStudentStep();
+ }catch(e){await intakeError("student",e);}
  finally{studentBusy=false;refreshGates();}
 });
 $("student-prev").addEventListener("click",()=>{
  if(studentBusy)return;
- step=Math.max(0,step-1);updateStep();window.scrollTo({top:130,behavior:"smooth"});
+ formError("student");step=Math.max(0,step-1);focusStudentStep();
 });
 async function saveDraft(){
  clearTimeout(saveTimer);
@@ -319,7 +351,8 @@ async function verifiedEmail(){
 }
 student.addEventListener("submit",async e=>{
  e.preventDefault();
- if(studentBusy||step!==6||submittedApplication)return;
+ if(studentBusy||step!==finalStep||submittedApplication)return;
+ formError("student");
  if(!stepNames.every((_,index)=>validateStep(index)))return;
  studentBusy=true;refreshGates();
  try{
@@ -332,7 +365,7 @@ student.addEventListener("submit",async e=>{
   submittedApplication={entryId:result.entryId,type:"self"};
   clearTimeout(saveTimer);student.reset();
   showReceipt("student",result.entryId,"self");
- }catch(e){notify(readable(e));}
+ }catch(e){await intakeError("student",e);}
  finally{studentBusy=false;refreshGates();}
 });
 
@@ -340,27 +373,40 @@ const nomForm=$("nomination-form");
 nomForm.addEventListener("input",()=>{if(!nominationBusy)nominationRequestId=null;});
 function nominationPrivacy(){
  const privacy=qs('input[name="privacy"]:checked',nomForm)?.value;
- $("nominator-identity").hidden=privacy==="anonymous";
+ const anonymous=privacy==="anonymous",signed=accountNeeded();
+ $("nominator-identity").hidden=anonymous;
+ $("nomination-sign-in").hidden=signed;
+ const status=$("nomination-account-status");
+ status.hidden=!signed;
+ status.textContent=signed?"Signed in as "+currentUser.email:"";
  qsa("#nominator-identity input").forEach(input=>{
-  input.disabled=privacy==="anonymous";
-  input.required=privacy!=="anonymous"&&input.name!=="relationship";
+  input.disabled=anonymous;
+  input.required=!anonymous&&input.name==="nominatorName";
  });
 }
-qsa('input[name="privacy"]',nomForm).forEach(x=>x.addEventListener("change",nominationPrivacy));
+qsa('input[name="privacy"]',nomForm).forEach(x=>x.addEventListener("change",()=>{formError("nomination");nominationPrivacy();}));
 nominationPrivacy();
 nomForm.addEventListener("submit",async e=>{
  e.preventDefault();
  if(nominationBusy||!$("nomination-receipt").hidden)return;
+ formError("nomination");
+ for(const input of nomForm.elements){
+  if(!input.checkValidity()){
+   const details=input.closest("details");
+   if(details)details.open=true;
+   input.reportValidity();return;
+  }
+ }
  nominationBusy=true;refreshGates();
  try{
   whenOpen();
-  if(!nomForm.reportValidity())return;
   const d=new FormData(nomForm),get=x=>String(d.get(x)||"").trim();
   const privacy=get("privacy");
+  let nominatorEmail="";
   if(privacy!=="anonymous"){
-   if(!accountNeeded())throw Error("Sign in to a verified account to submit a named or confidential nomination.");
-   if(get("nominatorEmail").toLowerCase()!==await verifiedEmail())throw Error("Use the email address on your verified Beacon account.");
-  } else if(!auth.currentUser){await signInAnonymously(auth);}
+   if(!accountNeeded()){location.hash="#account/nominate";return;}
+   nominatorEmail=await verifiedEmail();
+  }else if(!auth.currentUser){await signInAnonymously(auth);}
   const fields={
    studentName:get("studentName"),school:get("school"),grade:get("grade"),
    graduationYear:get("graduationYear"),state:get("state"),guardianEmail:get("guardianEmail"),applicantEmail:get("applicantEmail"),
@@ -370,12 +416,12 @@ nomForm.addEventListener("submit",async e=>{
   nominationRequestId||=crypto.randomUUID();
   const out=await call("submitEntry",{
    type:"nomination",privacy,fields,requestId:nominationRequestId,declaration:get("declaration")==="on",nominatorName:get("nominatorName"),
-   nominatorEmail:get("nominatorEmail"),relationship:get("relationship"),message:get("message")
+   nominatorEmail,relationship:get("relationship"),message:get("message")
   });
   nominationRequestId=null;
   nomForm.reset();nominationPrivacy();
   showReceipt("nomination",out.entryId);
- }catch(err){notify(readable(err));}
+ }catch(err){await intakeError("nomination",err);}
  finally{nominationBusy=false;refreshGates();}
 });
 
@@ -546,13 +592,41 @@ for(const kind of ["reference","consent"]){
  });
 }
 
+function renderIntakeControls(program){
+ const panel=el("section",undefined,"review-card intake-controls");
+ const status=el("p");status.setAttribute("role","status");
+ const button=el("button",undefined,"btn btn-gold");button.type="button";
+ const error=el("p",undefined,"intake-error");error.setAttribute("role","alert");error.hidden=true;
+ const actions=el("div",undefined,"button-row");
+ for(const [label,path] of [["View application","#apply"],["View nomination","#nominate"]]){
+  const link=el("a",label,"btn btn-outline");link.href=path;actions.append(link);
+ }
+ panel.append(el("h2","Applications and nominations"),status,button,error,actions);
+ const render=()=>{
+  status.textContent=program.intakeOpen?"Open for the Class of "+program.cycle+".":"Closed for the Class of "+program.cycle+".";
+  button.textContent=program.intakeOpen?"Close applications and nominations":"Open applications and nominations";
+ };
+ button.onclick=async()=>{
+  button.disabled=true;error.hidden=true;
+  try{
+   program=await call("setIntakeStatus",{intakeOpen:!program.intakeOpen});
+   updateIntakeStatus(program);render();
+  }catch(e){error.textContent=readable(e);error.hidden=false;}
+  finally{button.disabled=false;}
+ };
+ render();
+ return panel;
+}
+
 async function showCommittee(){
  const box=$("committee-content"),detail=$("review-detail");
  box.textContent="Checking access…";detail.replaceChildren();
- if(!accountNeeded()){box.innerHTML='<p>Sign in with an authorized committee account.</p><a href="#account" class="btn btn-gold">Sign in</a>';return;}
+ if(!accountNeeded()){box.innerHTML='<p>Sign in with an authorized committee account.</p><a href="#account/committee" class="btn btn-gold">Sign in</a>';return;}
  try{
   const result=await call("listReviewQueue");
-  box.replaceChildren(el("h2","Selection Registry — "+settings.cycle));
+  box.replaceChildren();
+  if(result.intake)box.append(renderIntakeControls(result.intake));
+  box.append(el("h2","Selection Registry — "+settings.cycle));
   box.append(el("p","Private review queue. No student information should be exported or publicly shared.","help"));
   const counts={total:result.entries?.length||0,nominations:0,underReview:0,selected:0};
   for(const entry of result.entries||[]){

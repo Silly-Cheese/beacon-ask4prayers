@@ -10,7 +10,7 @@
 
 ## Current functionality
 - Required email/password account registration before student applications.
-- Seven-section student wizard with secure autosave to Firestore and resume from dashboard.
+- Four-step student application with secure autosave to Firestore and resume from dashboard.
 - Named, confidential and fully anonymous official nominations. A nomination counts as a complete entry; no separate student application required.
 - Two references, guardian information, individualized invitation links, response forms and controlled administrative verification.
 - Nominated student can claim an existing nomination with a verified-email invitation.
@@ -21,7 +21,7 @@
 - Responsive main-site-matched design and GitHub Actions syntax validation.
 
 ## Intake and deployment
-The Class of 2027 accepts direct applications and official nominations when the Firebase Functions environment sets `BEACON_INTAKE_OPEN=true`. See [DEPLOYMENT.md](DEPLOYMENT.md) for the launch command and live verification. Both entry forms use the same server flag and issue a confirmation with a private entry ID.
+An administrator opens or closes applications and nominations together from the Committee page. See [DEPLOYMENT.md](DEPLOYMENT.md) for the PowerShell deploy script and the reviewer workflow. Both entry forms use the same server flag and issue a confirmation with a private entry ID.
 
 The program starts as **honorary recognition only**. Bibles Within Reach comes first; any eventual $500–$10,000-funded awards are speculative and must never be represented as already available or guaranteed. Letters and certificates do not promise funding. Donors do not select recipients.
 

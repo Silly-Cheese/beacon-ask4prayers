@@ -5,7 +5,7 @@ Repository: \`Silly-Cheese/beacon-ask4prayers\` • GitHub Pages: \`beacon.ask4p
 ## Current build
 - Coordinated **black, ivory and warm-beige** visual system based on The Prayer Project's \`theme.css\`, \`home.css\`, and Beacon recognition pages.
 - Student users **must create a Firebase email/password account**; email verification is required for final submission.
-- Seven application sections: identity, academic journey, character/service, personal essay, two references, guardian, review.
+- Four application steps: student details, personal essay, references and guardian, then review and submission.
 - Drafts autosave to Firestore through authenticated callable functions; protected from all direct client Firestore reads and writes. Resuming a draft requires account sign-in.
 - Official nominations: named, confidential or fully anonymous. Nominees **do not** have to reapply. Fully anonymous nominators cannot serve as verified references.
 - Private one-time invitations for one academic and one character reference and guardian consent; recipient responses are recorded and require administrative identity checks before being marked verified.
@@ -23,7 +23,7 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) for the current launch and verification comma
 3. Run \`npm install\` in \`functions\` and deploy using the Firebase CLI from repo root:
    \`firebase deploy --project beacon-ask4prayers --only firestore:rules,storage,functions\`.
    **Do not deploy Firebase Hosting.**
-4. Keep \`BEACON_INTAKE_OPEN=false\` in Firebase Functions environment until all minor privacy, consent, mail, abuse and review workflows have been tested.
+4. Open or close both entry forms from the Committee page as a Beacon administrator.
 5. Optionally install Firebase **Trigger Email** extension configured to watch the private \`mail\` collection. Set up SMTP with verified FROM address in the extension. Then set \`BEACON_EMAIL_ENABLED=true\` in Functions environment before deployment to queue invitation and decision messages. Without it, authorized admins generate private URLs for secure manual delivery; do not imply an email was sent.
 6. Use Google Cloud Application Default Credentials in a trusted environment and the server-only role script to designate one program administrator and 3–5 independent reviewers. Example in a terminal where ADC has been securely configured:
    \`node grant-role.cjs admin@example.org admin\`
@@ -42,7 +42,7 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) for the current launch and verification comma
 - Public recognition is optional; the platform does not publish home addresses or protected reference responses.
 - Only authenticated server-side administrators can manage invitations and finalize selections.
 - Domain verification, Firebase project configuration, SMTP extension, custom roles and public intake must be finished by the site operator. This repository cannot activate those console settings.
-- Intake stays closed by default even when the site is publicly accessible.
+- Intake starts closed on a fresh deployment. An administrator opens or closes both entry forms from the Committee page.
 
 ## Remaining production acceptance work
 - Publish approved privacy, eligibility, record-retention and child protection policies, including an appeals/corrections procedure.
@@ -53,6 +53,8 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) for the current launch and verification comma
 - Consider server-rendered PDF issuance with document signature metadata and official mail-fulfillment tracking when ready.
 
 ## Collections
+
+- `programSettings/{cycle}`: public intake status managed through the admin-only callable function.
 - \`drafts\`: private applicant drafts
 - \`entries\`: official self/nomination submissions and Scholar records
 - \`entries/{id}/references\`: private reference statements

@@ -5,7 +5,7 @@ const admin=require("firebase-admin");
 const crypto=require("node:crypto");
 admin.initializeApp();
 const db=admin.firestore();
-const open=defineString("BEACON_INTAKE_OPEN",{default:"false"});
+const legacyIntake=defineString("BEACON_INTAKE_OPEN",{default:"false"});
 const mailEnabled=defineString("BEACON_EMAIL_ENABLED",{default:"false"});
 const cycle="2027";
 const origin="https://beacon.ask4prayers.com";
@@ -18,8 +18,12 @@ const requireAuth=r=>{if(!r.auth?.uid||r.auth.token.firebase?.sign_in_provider==
 const staff=r=>{requireAuth(r);if(!(r.auth.token.admin===true||r.auth.token.reviewer===true))throw new HttpsError("permission-denied","Committee access required.");};
 const owner=r=>{requireAuth(r);if(r.auth.token.admin!==true)throw new HttpsError("permission-denied","Administrator access required.");};
 const isAdmin=r=>r.auth?.token?.admin===true;
-const intakeOpen=()=>open.value().trim().toLowerCase()==="true";
-const gate=()=>{if(!intakeOpen())throw new HttpsError("failed-precondition","Public intake is not open yet.");};
+const intakeRef=db.collection("programSettings").doc(cycle);
+const isIntakeOpen=snapshot=>snapshot.get("intakeOpen")??(legacyIntake.value().trim().toLowerCase()==="true");
+async function requireOpenIntake(tx){
+ if(!isIntakeOpen(await tx.get(intakeRef)))
+  throw new HttpsError("failed-precondition","Applications and nominations are currently closed.");
+}
 const hash=v=>crypto.createHash("sha256").update(v).digest("hex");
 const SECRET=(v)=>crypto.randomBytes(32).toString("base64url");
 const str=(v,max=180)=>clean(v,max);
@@ -64,25 +68,41 @@ function validateFinal(d){
 }
 const safeSummary=(d,id)=>({entryId:id,studentName:d.studentName||"",type:d.type||"self",cycle:d.cycle||cycle,status:d.status||"draft",grade:d.grade||"",referenceStatus:d.referenceStatus||"pending",guardianStatus:d.guardianStatus||"pending",createdAt:d.createdAt?.toDate?.()?.toISOString?.()||null});
 async function audit(action,entryId,uid,extra={}){await db.collection("auditLogs").add({action,entryId,actorUid:uid||null,at:stamp(),...extra});}
-exports.getProgramSettings=onCall(opts,async()=>({cycle,intakeOpen:intakeOpen(),honoraryOnly:true}));
+exports.getProgramSettings=onCall(opts,async()=>({
+ cycle,intakeOpen:isIntakeOpen(await intakeRef.get()),honoraryOnly:true
+}));
+exports.setIntakeStatus=onCall(opts,async r=>{
+ owner(r);
+ const intakeOpen=r.data?.intakeOpen;
+ if(typeof intakeOpen!=="boolean")err("Choose whether to open or close applications and nominations.");
+ await db.runTransaction(async tx=>{
+  const settings=await tx.get(intakeRef);
+  if(settings.exists&&settings.get("intakeOpen")===intakeOpen)return;
+  tx.set(intakeRef,{intakeOpen,updatedAt:stamp(),updatedBy:r.auth.uid},{merge:true});
+  tx.create(db.collection("auditLogs").doc(),{
+   action:"intake_status_changed",cycle,intakeOpen,actorUid:r.auth.uid,at:stamp()
+  });
+ });
+ return {cycle,intakeOpen,honoraryOnly:true};
+});
 exports.getDraft=onCall(opts,async r=>{
  requireAuth(r);
  const snap=await db.collection("drafts").doc(r.auth.uid+"_"+cycle).get();
  return {draft:snap.exists?snap.data().fields:null,updatedAt:snap.data()?.updatedAt?.toDate?.()?.toISOString?.()||null};
 });
 exports.saveDraft=onCall(opts,async r=>{
- requireAuth(r);gate();
+ requireAuth(r);
  const fields=normalize(r.data?.fields,true);
  const key=db.collection("selfSubmissionKeys").doc(cycle+"_"+r.auth.uid);
  const draft=db.collection("drafts").doc(r.auth.uid+"_"+cycle);
  await db.runTransaction(async tx=>{
+  await requireOpenIntake(tx);
   if((await tx.get(key)).exists)throw new HttpsError("already-exists","Your official application was already submitted.");
   tx.set(draft,{uid:r.auth.uid,cycle,fields,updatedAt:stamp()});
  });
  return {saved:true};
 });
 exports.submitEntry=onCall(opts,async r=>{
- gate();
  const type=str(r.data?.type,24);
  if(type==="nomination"&&!bool(r.data?.declaration))err("A nomination authenticity declaration is required.");
  if(type==="self"){
@@ -96,6 +116,7 @@ exports.submitEntry=onCall(opts,async r=>{
   const entryId=await db.runTransaction(async tx=>{
     const prior=await tx.get(key);
     if(prior.exists)return prior.get("entryId");
+    await requireOpenIntake(tx);
     const saved=await tx.get(draft);
     if(!saved.exists)err("Save your application first.");
     const fields=saved.get("fields");
@@ -147,6 +168,7 @@ exports.submitEntry=onCall(opts,async r=>{
    const prior=await tx.get(receipt);
    if(prior.exists)return prior.get("entryId");
   }
+  await requireOpenIntake(tx);
   const q=await tx.get(quota),n=Number(q.data()?.count||0);
   if(n>=2)throw new HttpsError("resource-exhausted","Daily nomination limit reached.");
   tx.set(quota,{count:n+1,updatedAt:stamp()},{merge:true});
@@ -191,7 +213,9 @@ exports.getMyEntry=onCall(opts,async r=>{
 exports.listReviewQueue=onCall(opts,async r=>{
  staff(r);
  const q=await db.collection("entries").orderBy("submittedAt","desc").limit(80).get();
- return {entries:q.docs.map(s=>safeSummary(s.data(),s.id))};
+ return {entries:q.docs.map(s=>safeSummary(s.data(),s.id)),
+  intake:isAdmin(r)?{cycle,intakeOpen:isIntakeOpen(await intakeRef.get()),honoraryOnly:true}:null
+ };
 });
 exports.getReviewEntry=onCall(opts,async r=>{
  staff(r);
