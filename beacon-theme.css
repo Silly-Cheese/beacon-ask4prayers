@@ -357,3 +357,36 @@ input::placeholder,textarea::placeholder{color:#938577}
   #print-document .nomination-entry-key { break-inside: avoid; }
   #print-document .nomination-page-footer { break-inside: avoid; }
 }
+
+#public-view .hero h1 {
+  font-size: clamp(3.15rem, 6.1vw, 5.7rem);
+  text-wrap: balance;
+}
+.home-claim {
+  margin: .85rem 0 0;
+  color: var(--muted);
+  font-size: .93rem;
+}
+.home-claim a {
+  color: var(--gold-strong);
+  text-decoration: underline;
+  text-underline-offset: .2em;
+}
+#public-view .intake-status { margin-top: .65rem; }
+#public-view .two-col h2 { margin-top: .1em; text-wrap: balance; }
+.home-paths { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.home-paths .path-card { display: flex; flex-direction: column; min-height: 0; padding: clamp(1.4rem, 3vw, 2rem); }
+.home-paths h3 { margin-top: 0; }
+.home-paths p { color: var(--muted); margin-top: 0; }
+.home-paths .text-link { align-items: center; gap: .45rem; margin-top: auto; }
+.home-utility { display: flex; flex-wrap: wrap; gap: .25rem 1.35rem; }
+.home-utility .text-link { gap: .45rem; }
+#public-view .faq details > .text-link { gap: .45rem; margin-top: 0; }
+
+@media (max-width: 760px) {
+  .home-paths { grid-template-columns: 1fr; gap: .8rem; margin-top: 1.5rem; }
+}
+@media (max-width: 620px) {
+  #public-view .hero h1 { font-size: clamp(2.6rem, 10vw, 3.4rem); }
+  #public-view .hero-art { height: 190px; }
+}
