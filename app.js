@@ -1,4 +1,4 @@
-import {auth,callable} from "./firebase.js";
+import {auth,callable} from "./beacon-firebase.js";
 import {
   onAuthStateChanged,signInWithEmailAndPassword,createUserWithEmailAndPassword,
   signInAnonymously,signOut,sendEmailVerification,sendPasswordResetEmail,reload

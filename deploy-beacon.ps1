@@ -1,15 +1,23 @@
+param([switch]$CheckCli)
+
 $ErrorActionPreference = 'Stop'
 $project = 'beacon-ask4prayers'
 
 Push-Location -LiteralPath $PSScriptRoot
 try {
+    if ($CheckCli) {
+        npx.cmd --yes --package=firebase-tools@latest -- firebase.cmd --version
+        if ($LASTEXITCODE -ne 0) { throw "Firebase CLI version check failed (exit $LASTEXITCODE)." }
+        return
+    }
+
     Write-Host 'Installing Beacon Functions dependencies...'
     npm.cmd --prefix functions install
     if ($LASTEXITCODE -ne 0) { throw 'Dependency installation failed. See the npm output above.' }
 
     Write-Host 'Deploying Beacon Functions and Firestore rules...'
-    npx.cmd --yes firebase-tools@latest deploy --project $project --only 'functions,firestore:rules'
-    if ($LASTEXITCODE -ne 0) { throw 'Firebase deployment failed. See the Firebase output above.' }
+    npx.cmd --yes --package=firebase-tools@latest -- firebase.cmd deploy --project $project --only 'functions,firestore:rules'
+    if ($LASTEXITCODE -ne 0) { throw "Firebase CLI exited with code $LASTEXITCODE. See the Firebase output above." }
 
     $response = Invoke-RestMethod -Method Post -ErrorAction Stop `
         -Uri "https://us-central1-$project.cloudfunctions.net/getProgramSettings" `

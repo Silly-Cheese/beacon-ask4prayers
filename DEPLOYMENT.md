@@ -4,10 +4,10 @@ The public website is hosted on GitHub Pages from `main`. The PowerShell script 
 
 ## Deploy from PowerShell
 
-Open the `beacon-ask4prayers` repository folder. Use Node.js 22 and sign in to the Firebase CLI once with the Google account that manages the project.
+Open the `beacon-ask4prayers` repository folder. Sign in to the Firebase CLI once with the Google account that manages the project. Cloud Functions deploy with the Node.js 22 runtime declared in the repo. On a computer running Node.js 24, npm may print an engine warning during installation.
 
 ```powershell
-npx.cmd --yes firebase-tools@latest login
+npx.cmd --yes --package=firebase-tools@latest -- firebase.cmd login
 ```
 
 For the first deployment and future backend updates, run these two lines from the repo root. The process-scoped execution policy applies only to the PowerShell process that runs this script.
