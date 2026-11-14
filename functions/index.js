@@ -18,32 +18,34 @@ const requireAuth=r=>{if(!r.auth?.uid||r.auth.token.firebase?.sign_in_provider==
 const staff=r=>{requireAuth(r);if(!(r.auth.token.admin===true||r.auth.token.reviewer===true))throw new HttpsError("permission-denied","Committee access required.");};
 const owner=r=>{requireAuth(r);if(r.auth.token.admin!==true)throw new HttpsError("permission-denied","Administrator access required.");};
 const isAdmin=r=>r.auth?.token?.admin===true;
-const gate=()=>{if(open.value()!=="true")throw new HttpsError("failed-precondition","Public intake is not open yet.");};
+const intakeOpen=()=>open.value().trim().toLowerCase()==="true";
+const gate=()=>{if(!intakeOpen())throw new HttpsError("failed-precondition","Public intake is not open yet.");};
 const hash=v=>crypto.createHash("sha256").update(v).digest("hex");
 const SECRET=(v)=>crypto.randomBytes(32).toString("base64url");
 const str=(v,max=180)=>clean(v,max);
 const y=v=>{const n=Number(v);return Number.isInteger(n)&&n>=2026&&n<=2040?n:null;};
 const bool=v=>v===true;
 const dedupe=o=>hash([o.studentName,o.school,o.graduationYear].map(x=>String(x).toLowerCase().trim().replace(/\s+/g,"")).join("|"));
-function references(v) {
+function references(v,draft=false) {
  if(!Array.isArray(v))return [];
- return v.slice(0,2).map(x=>({name:str(x?.name,120),email:mail(x?.email),relationship:str(x?.relationship,100)}))
-  .filter(x=>x.name||x.email);
+ const email=draft?v=>str(v,254).toLowerCase():mail;
+ return v.slice(0,2).map(x=>({name:str(x?.name,120),email:email(x?.email),relationship:str(x?.relationship,100)}));
 }
-function normalize(v) {
+function normalize(v,draft=false) {
  const d=v&&typeof v==="object"?v:{};
+ const email=draft?v=>str(v,254).toLowerCase():mail;
  const o={
  studentName:str(d.studentName,120),preferredName:str(d.preferredName,100),
  school:str(d.school,160),grade:str(d.grade,4),graduationYear:y(d.graduationYear),
  state:str(d.state,80),educationType:str(d.educationType,40),
- applicantEmail:mail(d.applicantEmail),ageBand:str(d.ageBand,20),
+ applicantEmail:email(d.applicantEmail),ageBand:str(d.ageBand,20),
  gpa:d.gpa===""||d.gpa==null?null:Number(d.gpa),
  academicInterests:str(d.academicInterests,1800),futureGoals:str(d.futureGoals,1800),
  activities:str(d.activities,2400),service:str(d.service,2400),responsibilities:str(d.responsibilities,2400),
  honors:str(d.honors,1600),personalStatement:str(d.personalStatement,6000),
  additionalInfo:str(d.additionalInfo,2000),guardianName:str(d.guardianName,120),
- guardianEmail:mail(d.guardianEmail),guardianRelationship:str(d.guardianRelationship,100),
- references:references(d.references)
+ guardianEmail:email(d.guardianEmail),guardianRelationship:str(d.guardianRelationship,100),
+ references:references(d.references,draft)
  };
  if(o.gpa!==null&&(!Number.isFinite(o.gpa)||o.gpa<0||o.gpa>4))err("GPA must be between 0 and 4.0 (unweighted).");
  return o;
@@ -52,13 +54,17 @@ function validateFinal(d){
  if(d.studentName.length<3||d.school.length<2||!["9","10","11","12"].includes(d.grade)||!d.graduationYear)err("Complete your name, school, grade and graduation year.");
  if(d.personalStatement.length<180)err("Please complete the personal essay.");
  if(d.ageBand!=="adult"&&d.ageBand!=="minor")err("Please indicate whether you are under 18.");
- if(d.ageBand==="minor"&&!d.guardianEmail)err("Provide a guardian email so consent can be requested.");
- if(d.references.length!==2||d.references.some(x=>!x.name||!x.email)||d.references[0].email===d.references[1].email)err("Provide two different references with names and email addresses.");
+ if(d.ageBand==="minor"&&(!d.guardianName||!d.guardianEmail))err("Provide your guardian’s name and email so consent can be requested.");
+ if(d.references.length!==2||d.references.some(x=>!x.name||!x.email)||d.references[0].email===d.references[1].email)
+  err("Provide two different references with names and email addresses.");
+ if(d.references.some(x=>x.email===d.applicantEmail||x.email===d.guardianEmail))
+  err("Use reference email addresses that differ from the applicant’s and guardian’s email addresses.");
+ if(d.ageBand==="minor"&&d.guardianEmail===d.applicantEmail)err("Use a separate email for your guardian.");
  // GPA is documented at eligibility screening; nominations may lack access to grades.
 }
 const safeSummary=(d,id)=>({entryId:id,studentName:d.studentName||"",type:d.type||"self",cycle:d.cycle||cycle,status:d.status||"draft",grade:d.grade||"",referenceStatus:d.referenceStatus||"pending",guardianStatus:d.guardianStatus||"pending",createdAt:d.createdAt?.toDate?.()?.toISOString?.()||null});
 async function audit(action,entryId,uid,extra={}){await db.collection("auditLogs").add({action,entryId,actorUid:uid||null,at:stamp(),...extra});}
-exports.getProgramSettings=onCall({...opts,enforceAppCheck:false},async()=>({cycle,intakeOpen:open.value()==="true",honoraryOnly:true}));
+exports.getProgramSettings=onCall({...opts,enforceAppCheck:false},async()=>({cycle,intakeOpen:intakeOpen(),honoraryOnly:true}));
 exports.getDraft=onCall(opts,async r=>{
  requireAuth(r);
  const snap=await db.collection("drafts").doc(r.auth.uid+"_"+cycle).get();
@@ -66,8 +72,13 @@ exports.getDraft=onCall(opts,async r=>{
 });
 exports.saveDraft=onCall(opts,async r=>{
  requireAuth(r);gate();
- const fields=normalize(r.data?.fields);
- await db.collection("drafts").doc(r.auth.uid+"_"+cycle).set({uid:r.auth.uid,cycle,fields,updatedAt:stamp()},{merge:true});
+ const fields=normalize(r.data?.fields,true);
+ const key=db.collection("selfSubmissionKeys").doc(cycle+"_"+r.auth.uid);
+ const draft=db.collection("drafts").doc(r.auth.uid+"_"+cycle);
+ await db.runTransaction(async tx=>{
+  if((await tx.get(key)).exists)throw new HttpsError("already-exists","Your official application was already submitted.");
+  tx.set(draft,{uid:r.auth.uid,cycle,fields,updatedAt:stamp()});
+ });
  return {saved:true};
 });
 exports.submitEntry=onCall(opts,async r=>{
@@ -79,25 +90,31 @@ exports.submitEntry=onCall(opts,async r=>{
   if(r.auth.token.email_verified!==true)throw new HttpsError("failed-precondition","Verify your account email before final submission.");
   if(!bool(r.data?.declarations?.truthful)||!bool(r.data?.declarations?.requirements))
    throw new HttpsError("failed-precondition","Both application declarations must be acknowledged.");
-  const draft=await db.collection("drafts").doc(r.auth.uid+"_"+cycle).get();
-  if(!draft.exists)err("Save your application first.");
-  const d=draft.data().fields;validateFinal(d);
+  const draft=db.collection("drafts").doc(r.auth.uid+"_"+cycle);
   const key=db.collection("selfSubmissionKeys").doc(cycle+"_"+r.auth.uid);
   const entry=db.collection("entries").doc();
-  await db.runTransaction(async tx=>{
+  const entryId=await db.runTransaction(async tx=>{
     const prior=await tx.get(key);
-    if(prior.exists)throw new HttpsError("already-exists","You have already submitted an entry this cycle.");
+    if(prior.exists)return prior.get("entryId");
+    const saved=await tx.get(draft);
+    if(!saved.exists)err("Save your application first.");
+    const fields=saved.get("fields");
+    const guardian=fields.ageBand==="adult"?{guardianName:"",guardianEmail:"",guardianRelationship:""}:{};
+    const d=normalize({...fields,...guardian,applicantEmail:r.auth.token.email});
+    validateFinal(d);
     tx.create(key,{entryId:entry.id,createdAt:stamp()});
     tx.create(entry,{
-      ...d,applicantEmail:r.auth.token.email?.toLowerCase()||"",type:"self",entryId:entry.id,cycle,status:"submitted",applicantUid:r.auth.uid,
+      ...d,type:"self",entryId:entry.id,cycle,status:"submitted",applicantUid:r.auth.uid,
       submitterUid:r.auth.uid,submittedAt:stamp(),createdAt:stamp(),lastUpdatedAt:stamp(),
       publicId:null,studentDeclaration:{truthful:true,requirements:true,recordedAt:new Date().toISOString(),version:"2027-v1"},guardianStatus:d.ageBand==="adult"?"not_required":"pending",
       referenceStatus:"pending",referenceCount:0,selectionReady:false,decision:null,
       duplicateKey:dedupe(d)
     });
+    tx.delete(draft);
+    tx.create(db.collection("auditLogs").doc(),{action:"self_submitted",entryId:entry.id,actorUid:r.auth.uid,at:stamp()});
+    return entry.id;
   });
-  await audit("self_submitted",entry.id,r.auth.uid);
-  return {received:true,entryId:entry.id};
+  return {received:true,entryId};
  }
  if(type!=="nomination")err("Unknown submission type.");
  if(!r.auth?.uid)throw new HttpsError("unauthenticated","Sign in or use the anonymous entry mode.");
@@ -117,14 +134,23 @@ exports.submitEntry=onCall(opts,async r=>{
   if(!r.auth.token.email_verified||!nominator.name||nominator.email!==r.auth.token.email?.toLowerCase())
    throw new HttpsError("failed-precondition","Named and confidential nominators must sign in with their verified matching email.");
  }
+ const requestId=str(r.data?.requestId,100);
+ if(requestId&&!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(requestId))err("Invalid nomination receipt key.");
+ // A random receipt key is independent of the student's or nominator's identity.
+ const receipt=requestId?db.collection("nominationReceipts").doc(hash(cycle+":"+requestId)):null;
  const doc=db.collection("entries").doc();
  const day=new Date().toISOString().slice(0,10);
  // per UID quota is intentionally conservative; App Check is also mandatory.
  const quota=db.collection("submissionQuotas").doc(hash(r.auth.uid+day));
- await db.runTransaction(async tx=>{
+ const entryId=await db.runTransaction(async tx=>{
+  if(receipt){
+   const prior=await tx.get(receipt);
+   if(prior.exists)return prior.get("entryId");
+  }
   const q=await tx.get(quota),n=Number(q.data()?.count||0);
   if(n>=2)throw new HttpsError("resource-exhausted","Daily nomination limit reached.");
   tx.set(quota,{count:n+1,updatedAt:stamp()},{merge:true});
+  if(receipt)tx.create(receipt,{entryId:doc.id,createdAt:stamp()});
   tx.create(doc,{
    ...d,personalStatement:d.personalStatement,type:"nomination",privacy,nominator,
    cycle,status:"submitted",entryId:doc.id,
@@ -134,9 +160,12 @@ exports.submitEntry=onCall(opts,async r=>{
    guardianStatus:"pending",referenceStatus:"pending",referenceCount:0,selectionReady:false,
    decision:null,duplicateKey:dedupe(d)
   });
+  tx.create(db.collection("auditLogs").doc(),{
+   action:"nomination_submitted",entryId:doc.id,actorUid:privacy==="anonymous"?null:r.auth.uid,at:stamp(),privacy
+  });
+  return doc.id;
  });
- await audit("nomination_submitted",doc.id,privacy==="anonymous"?null:r.auth.uid,{privacy});
- return {received:true,entryId:doc.id};
+ return {received:true,entryId};
 });
 exports.getMyEntries=onCall(opts,async r=>{
  requireAuth(r);
@@ -175,18 +204,23 @@ exports.getReviewEntry=onCall(opts,async r=>{
  const recusals=await db.collection("entries").doc(id).collection("recusals").get();
  if(recusals.docs.some(x=>x.id===r.auth.uid))throw new HttpsError("permission-denied","You have recused yourself from reviewing this entry.");
  return {entry:{
-   ...safeSummary(d,id),school:d.school,graduationYear:d.graduationYear,gpa:d.gpa,
+   ...safeSummary(d,id),canManage:isAdmin(r),school:d.school,graduationYear:d.graduationYear,gpa:d.gpa,
    personalStatement:d.personalStatement,activities:d.activities,academicInterests:d.academicInterests,
    service:d.service,futureGoals:d.futureGoals,responsibilities:d.responsibilities,
    honors:d.honors,additionalInfo:d.additionalInfo,guardianStatus:d.guardianStatus,
    referenceStatus:d.referenceStatus,referenceCount:d.referenceCount||0,
-   referenceSuggestions:d.references||[],
+   referenceSuggestions:isAdmin(r)?d.references||[]:[],
    duplicateCount:(await db.collection("entries").where("duplicateKey","==",d.duplicateKey).limit(10).get()).size,
    nominator:isAdmin(r)&&d.privacy!=="anonymous"?d.nominator:null,
    duplicateKey:d.duplicateKey,verifiedEligibility:d.verifiedEligibility===true,
-   references:refs.docs.map(x=>({id:x.id,...x.data()})),
+   references:refs.docs.map(x=>{
+     const reference=x.data();
+     if(isAdmin(r))return {id:x.id,...reference};
+     return {id:x.id,slot:reference.slot??Number(x.id),verified:reference.verified,answers:reference.answers};
+   }),
    applicantEmail:isAdmin(r)?d.applicantEmail||"":null,
    guardianEmail:isAdmin(r)?d.guardianEmail||"":null,
+   guardianName:isAdmin(r)?d.guardianName||"":null,
    ageBand:d.ageBand||"unknown",
    verifiedEligibility:d.verifiedEligibility===true,
    endorsementCount:d.endorsementCount||0,
@@ -338,6 +372,9 @@ exports.verifyRequirement=onCall(opts,async r=>{
   if(![0,1].includes(slot))err("Invalid reference.");
   const doc=entry.collection("references").doc(String(slot)),rs=await doc.get();
   if(!rs.exists)throw new HttpsError("failed-precondition","Reference not submitted.");
+  const other=await entry.collection("references").doc(String(1-slot)).get();
+  if(other.get("verified")===true&&other.get("recipientEmail")===rs.get("recipientEmail"))
+   throw new HttpsError("failed-precondition","The two verified references must come from different people.");
   await doc.update({verified:true,verifiedBy:r.auth.uid,verifiedAt:stamp()});
   const both=await entry.collection("references").get();
   const count=both.docs.filter(x=>x.id==="0"||x.id==="1").filter(x=>x.get("verified")===true||x.id===String(slot)).length;
@@ -403,7 +440,7 @@ exports.updateEntryContacts=onCall(opts,async r=>{
  if("guardianEmail" in fields)changes.guardianEmail=mail(fields.guardianEmail);
  if("guardianName" in fields)changes.guardianName=str(fields.guardianName,120);
  if("applicantEmail" in fields)changes.applicantEmail=mail(fields.applicantEmail);
- if("ageBand" in fields){if(!["minor","adult"].includes(fields.ageBand))err("Invalid age band.");changes.ageBand=fields.ageBand;}
+ if("ageBand" in fields){if(!["minor","adult",""].includes(fields.ageBand))err("Invalid age band.");changes.ageBand=fields.ageBand;}
  if("gpa" in fields){const n=fields.gpa===""?null:Number(fields.gpa);if(n!==null&&(!Number.isFinite(n)||n<0||n>4))err("GPA outside valid range.");changes.gpa=n;}
  if("references" in fields)changes.references=references(fields.references);
  const guardianChanged="guardianEmail" in changes&&changes.guardianEmail!==original.guardianEmail;
@@ -440,6 +477,9 @@ exports.useVerifiedNominatorReference=onCall(opts,async r=>{
  const slot=Number(r.data?.slot);
  if(![0,1].includes(slot))err("Choose reference slot 1 or 2.");
  if(!bool(r.data?.identityVerified))err("Verify nominator identity independently first.");
+ const other=await entry.collection("references").doc(String(1-slot)).get();
+ if(other.get("recipientEmail")===d.nominator.email)
+  throw new HttpsError("failed-precondition","This nominator already occupies the other reference slot.");
  const ref=entry.collection("references").doc(String(slot));
  await ref.set({fullName:d.nominator.name,signature:"Verified nominator statement",answers:[
   d.nominator.relationship||"Known by nominator",

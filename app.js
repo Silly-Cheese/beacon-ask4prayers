@@ -6,9 +6,10 @@ import {
 const $=id=>document.getElementById(id),qs=(s,root=document)=>root.querySelector(s),qsa=(s,root=document)=>[...root.querySelectorAll(s)];
 const call=async(name,data={})=>(await callable(name)(data)).data;
 const PAGE={home:"public-view",mission:"public-view",selection:"public-view",opportunities:"public-view",faq:"public-view",apply:"apply-view",nominate:"nominate-view",account:"account-view",dashboard:"dashboard-view",scholar:"scholar-view",committee:"committee-view",policy:"policy-view",reference:"reference-view",consent:"consent-view",claim:"claim-view",verify:"verify-view"};
-let currentUser=null,settings={cycle:"2027",intakeOpen:false},step=0,draftLoadedFor=null,saveTimer=null,savingPromise=null,inviteToken=null,activeScholarId=null;
+let currentUser=null,settings={cycle:"2027",intakeOpen:false},intakeState="loading",step=0;
+let draftLoadedFor=null,draftLoading=null,saveTimer=null,savingPromise=null,inviteToken=null,activeScholarId=null;
+let studentBusy=false,nominationBusy=false,nominationRequestId=null,submittedApplication=null,accountReturn="dashboard";
 const stepNames=["Your identity","Academic journey","Service and leadership","Personal essay","Two references","Guardian information","Review and submit"];
-const numericKeys=new Set(["graduationYear","gpa"]);
 const timestamp=s=>s?new Date(s).toLocaleDateString():"";
 const escaped=v=>String(v??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 let toastTimeout;
@@ -18,7 +19,7 @@ function notify(msg){
 }
 function readable(e){
   const c=String(e?.code||"");
-  if(c.includes("app-check"))return "App Check is not yet configured in the website. Add the reCAPTCHA Enterprise site key to firebase.js.";
+  if(c.includes("app-check"))return "The secure service could not verify your browser. Reload the page and try again.";
   if(c.includes("failed-precondition"))return e.message||"A required verification step is incomplete.";
   if(c.includes("permission-denied"))return "This action requires additional authorization.";
   if(c.includes("unauthenticated"))return "Sign in with your Beacon account first.";
@@ -30,14 +31,19 @@ function el(tag,txt,klass){
   if(klass)n.className=klass;return n;
 }
 function whenOpen(){
-  if(!APP_CHECK_SITE_KEY)throw Error("App Check is not fully configured in the Beacon website. Add the public reCAPTCHA Enterprise site key to firebase.js.");
-  if(!settings.intakeOpen)throw Error("Application intake is closed while safeguards and program policies are finalized.");
+ if(intakeState!=="open")throw Error("Intake is currently unavailable. Check the program status before trying again.");
 }
 function accountNeeded(){return !!currentUser&&!currentUser.isAnonymous;}
 function route(){
- const raw=decodeURIComponent(location.hash.slice(1)||"home");
- const [key,...parts]=raw.split("/");
- const page=PAGE[key]?key:"home";
+ const [key,...parts]=(location.hash.slice(1)||"home").split("/");
+ const page=Object.hasOwn(PAGE,key)?key:"home";
+ if(page==="account"){
+  const target=parts.join("/");
+  accountReturn=/^(apply|nominate|dashboard)$|^claim\/[A-Za-z0-9_-]{43}$/.test(target)?target:"dashboard";
+  const link=$("account-continue");
+  link.href="#"+accountReturn;
+  link.textContent=accountReturn==="apply"?"Continue to your application →":accountReturn==="nominate"?"Return to your nomination →":accountReturn.startsWith("claim/")?"Return to your invitation →":"Open dashboard →";
+ }
  inviteToken=(page==="reference"||page==="consent"||page==="claim")?parts.join("/"):null;
  Object.values(PAGE).forEach(id=>{const node=$(id);if(node)node.hidden=true;});
  $(PAGE[page]).hidden=false;
@@ -51,7 +57,10 @@ function route(){
  if(page==="committee")showCommittee();
  if(page==="scholar")showScholar();
  if(page==="reference"||page==="consent")loadInvitation(page);
- if(page==="claim")loadClaim();
+ if(page==="claim"){
+  $("claim-account-link").href="#account/claim/"+encodeURIComponent(inviteToken||"");
+  loadClaim();
+ }
  if(page==="verify"&&parts.length){const input=qs('input[name="publicId"]',$("verify-form"));input.value=parts[0];checkScholarId(parts[0]);}
 }
 $("menu-toggle").addEventListener("click",()=>{
@@ -64,24 +73,47 @@ function refreshGates(){
  $("account-guest").hidden=signed;
  $("account-signed-in").hidden=!signed;
  $("account-link").textContent=signed?"My Account":"Sign in";
- $("student-auth-gate").hidden=signed;
- $("student-wizard").hidden=!signed;
- $("student-intake-gate").hidden=settings.intakeOpen&&!!APP_CHECK_SITE_KEY;
- $("nomination-intake-gate").hidden=settings.intakeOpen&&!!APP_CHECK_SITE_KEY;
- const appMessage=!APP_CHECK_SITE_KEY?"App Check is registered but the reCAPTCHA Enterprise site key must also be placed in firebase.js before secure submissions can work.":"Applications are not open yet. You can explore the steps, but sending student information is disabled.";
- $("student-intake-gate").textContent=appMessage;
- $("nomination-intake-gate").textContent=appMessage;
+ const open=intakeState==="open";
+ $("student-auth-gate").hidden=signed||!open;
+ $("student-wizard").hidden=!signed||!open||!!submittedApplication;
+ $("student-intake-gate").hidden=open&&(!signed||!!submittedApplication||draftLoadedFor===currentUser.uid);
+ $("nomination-intake-gate").hidden=open;
+ $("nomination-layout").hidden=!open||!$("nomination-receipt").hidden;
+ const status={
+  loading:"Checking availability…",
+  unavailable:"We couldn’t check availability. Please reload this page to try again.",
+  closed:"are currently closed."
+ };
+ const publicStatus=$("public-intake-status");
+ publicStatus.dataset.state=intakeState;
+ publicStatus.textContent=open?"Class of "+settings.cycle+" • Applications and nominations are open."
+  :intakeState==="closed"?"Applications and nominations "+status.closed:status[intakeState];
+ $("student-intake-gate").textContent=open?"Loading your application…"
+  :intakeState==="closed"?"Student applications "+status.closed:status[intakeState];
+ $("nomination-intake-gate").textContent=intakeState==="closed"?"Nominations "+status.closed:status[intakeState];
  $("account-email").textContent=signed?currentUser.email:"";
  $("account-verification").textContent=signed?(currentUser.emailVerified?"Email verified":"Check your email and verify it before submitting your final application."):"";
  $("verify-email").hidden=!signed||currentUser.emailVerified;
- $("nom-submit").disabled=!settings.intakeOpen||!APP_CHECK_SITE_KEY;
- qsa("#student-form input,#student-form select,#student-form textarea,#student-form button").forEach(n=>n.disabled=!settings.intakeOpen||!APP_CHECK_SITE_KEY);
- // Nominations remain previewable, but cannot be submitted while intake is closed.
+ $("nom-submit").disabled=!open||nominationBusy;
+ $("student-submit").disabled=!open||studentBusy;
+ $("student-next").disabled=!open||!signed||draftLoadedFor!==currentUser.uid||studentBusy;
+ qsa(".wizard-step",student).forEach(panel=>{
+  panel.disabled=!open||!signed||draftLoadedFor!==currentUser.uid;
+  panel.inert=studentBusy;
+ });
+ $("student-prev").disabled=studentBusy;
  const signedEmail=currentUser?.email||"";
  const nomEmail=qs('[name="nominatorEmail"]',$("nomination-form"));
- if(nomEmail&&!nomEmail.value&&signedEmail)nomEmail.value=signedEmail;
+ if(signedEmail)nomEmail.value=signedEmail;
 }
 onAuthStateChanged(auth,async u=>{
+ const previousUid=currentUser?.isAnonymous?null:currentUser?.uid;
+ const nextUid=u?.isAnonymous?null:u?.uid;
+ if(previousUid!==nextUid){
+  clearTimeout(saveTimer);draftLoadedFor=null;draftLoading=null;submittedApplication=null;step=0;
+  student.reset();$("student-receipt").hidden=true;$("student-receipt").replaceChildren();
+  countEssay();toggleGuardian();updateStep();
+ }
  currentUser=u;
  refreshGates();
  if(location.hash==="#apply")await prepareApplication();
@@ -90,13 +122,20 @@ onAuthStateChanged(auth,async u=>{
  if(location.hash==="#scholar")showScholar();
 });
 async function init(){
- try{settings=await call("getProgramSettings");}
- catch(e){notify("Program status unavailable: "+readable(e));}
- refreshGates();updateStep();route();
+ route();
+ try{
+  settings=await call("getProgramSettings");
+  intakeState=!APP_CHECK_SITE_KEY||typeof settings?.intakeOpen!=="boolean"?"unavailable":settings.intakeOpen?"open":"closed";
+ }catch{
+  intakeState="unavailable";
+ }
+ refreshGates();
+ if(location.hash==="#apply")await prepareApplication();
+ if(location.hash==="#dashboard"&&accountNeeded())showDashboard();
 }
 $("auth-form").addEventListener("submit",async e=>{
  e.preventDefault();const d=new FormData(e.currentTarget);
- try{await signInWithEmailAndPassword(auth,String(d.get("email")).trim(),String(d.get("password")));notify("Welcome back. Your application is linked to your account.");location.hash="#dashboard";}
+ try{await signInWithEmailAndPassword(auth,String(d.get("email")).trim(),String(d.get("password")));notify("Signed in to Beacon.");location.hash="#"+accountReturn;}
  catch(err){notify(readable(err));}
 });
 $("create-account").addEventListener("click",async()=>{
@@ -104,9 +143,11 @@ $("create-account").addEventListener("click",async()=>{
  const d=new FormData(form);
  try{
   const cred=await createUserWithEmailAndPassword(auth,String(d.get("email")).trim(),String(d.get("password")));
-  await sendEmailVerification(cred.user);
-  notify("Account created. Verify your email; you can then start your saved application.");
-  location.hash="#apply";
+  try{
+   await sendEmailVerification(cred.user);
+   notify("Account created. Check your inbox to verify your email before submitting.");
+  }catch(e){notify("Account created. Use the button on your account page to resend the verification email.");}
+  location.hash="#"+accountReturn;
  }catch(e){notify(readable(e));}
 });
 $("sign-out").addEventListener("click",async()=>{await signOut(auth);draftLoadedFor=null;notify("Signed out.");location.hash="#home";});
@@ -141,15 +182,51 @@ function fillStudent(d){
 }
 async function prepareApplication(){
  refreshGates();
- if(!accountNeeded())return;
- if(!settings.intakeOpen){updateStep();return;}
- if(draftLoadedFor===currentUser.uid)return;
+ if(!accountNeeded()||intakeState!=="open"||submittedApplication||draftLoadedFor===currentUser.uid||draftLoading)return;
+ const uid=currentUser.uid;
+ const pending=Promise.all([call("getDraft"),call("getMyEntries")]);
+ draftLoading=pending;
  try{
-  const result=await call("getDraft");
-  if(draftLoadedFor&&draftLoadedFor!==currentUser.uid)student.reset();
-  fillStudent(result.draft);draftLoadedFor=currentUser.uid;updateStep();
+  const [result,submitted]=await pending;
+  if(!accountNeeded()||currentUser.uid!==uid)return;
+  submittedApplication=submitted.entries?.find(entry=>entry.cycle===settings.cycle)||null;
+  if(submittedApplication)showReceipt("student",submittedApplication.entryId,submittedApplication.type);
+  else fillStudent(result.draft);
+  draftLoadedFor=uid;
   $("draft-status").textContent=result.updatedAt?"Saved "+timestamp(result.updatedAt):"No draft saved yet";
- }catch(e){notify("Unable to load your saved application: "+readable(e));}
+  updateStep();
+  refreshGates();
+ }catch(e){
+  if(currentUser?.uid!==uid)return;
+  $("student-intake-gate").textContent="Unable to load your application. ";
+  const retry=el("button","Try again","link-button");
+  retry.type="button";retry.onclick=prepareApplication;
+  $("student-intake-gate").append(retry);
+ }finally{
+  if(draftLoading===pending)draftLoading=null;
+ }
+}
+function showReceipt(kind,entryId,type){
+ const panel=$(kind+"-receipt");
+ const heading=el("h2",kind==="nomination"?"Nomination received":type==="nomination"?"Your nomination is on file":"Application on file");
+ heading.tabIndex=-1;
+ const code=el("code",entryId);
+ const id=el("p","Entry ID ");id.append(code);
+ const guidance=el("p",kind==="nomination"
+  ?"This is the student’s official entry. Save the entry ID for your records. Beacon may follow up to confirm eligibility, references or guardian consent."
+  :"You can check the status of this entry in your Beacon dashboard.");
+ const link=el("a",kind==="nomination"?"Return to Beacon Scholars":"View your dashboard →","btn btn-gold");
+ link.href=kind==="nomination"?"#home":"#dashboard";
+ panel.replaceChildren(heading,id,guidance,link);
+ if(kind==="nomination"){
+  const another=el("button","Nominate another student","btn btn-outline");
+  another.type="button";
+  another.onclick=()=>{panel.hidden=true;refreshGates();qs('[name="studentName"]',nomForm).focus();};
+  panel.append(" ",another);
+ }
+ panel.hidden=false;
+ refreshGates();
+ if(!panel.closest("[hidden]"))heading.focus();
 }
 function updateStep(){
  qsa(".wizard-step",student).forEach((panel,i)=>panel.hidden=i!==step);
@@ -168,67 +245,114 @@ function updateStep(){
   ].join(" • ");
  }
 }
-function validateStep(){
- const current=qs('.wizard-step[data-step="'+step+'"]',student);
+function validateStep(index=step){
+ const current=qs('.wizard-step[data-step="'+index+'"]',student);
  for(const control of qsa("input,select,textarea",current)){
-  if(!control.checkValidity()){control.reportValidity();return false;}
+  if(!control.checkValidity()){
+   step=index;updateStep();control.reportValidity();return false;
+  }
  }
- if(step===3&&studentFields().personalStatement.trim().length<180){notify("Your essay needs a little more detail before continuing.");return false;}
- if(step===4){const r=studentFields().references;if(r[0].email.trim().toLowerCase()===r[1].email.trim().toLowerCase()){notify("Provide two different references.");return false;}}
- if(step===5&&studentFields().ageBand==="minor"&&!studentFields().guardianEmail){notify("A guardian email is required for applicants under 18.");return false;}
- return true;
+ const fields=studentFields();
+ let message="";
+ if(index===3&&fields.personalStatement.trim().length<180)message="Your essay needs a little more detail before continuing.";
+ if(index===4&&fields.references[0].email.trim().toLowerCase()===fields.references[1].email.trim().toLowerCase())
+  message="Provide two different reference email addresses.";
+ if(!message)return true;
+ step=index;updateStep();notify(message);return false;
 }
 $("student-next").addEventListener("click",async()=>{
- if(!validateStep())return;
- if(settings.intakeOpen&&accountNeeded()){try{await saveDraft(false);}catch(e){notify("Save failed: "+readable(e));return;}}
- step=Math.min(6,step+1);updateStep();window.scrollTo({top:130,behavior:"smooth"});
+ if(studentBusy||!validateStep())return;
+ studentBusy=true;
+ refreshGates();
+ try{
+  await saveDraft();
+  step=Math.min(6,step+1);updateStep();window.scrollTo({top:130,behavior:"smooth"});
+ }catch(e){notify("Save failed: "+readable(e));}
+ finally{studentBusy=false;refreshGates();}
 });
-$("student-prev").addEventListener("click",()=>{step=Math.max(0,step-1);updateStep();window.scrollTo({top:130,behavior:"smooth"});});
-async function saveDraft(silent=true){
- if(!accountNeeded()||!settings.intakeOpen)return;
- if(savingPromise)await savingPromise;
- $("draft-status").textContent="Saving…";
- savingPromise=call("saveDraft",{fields:studentFields()});
- try{await savingPromise;$("draft-status").textContent="Saved securely";if(!silent)notify("Draft saved to your account.");}
- catch(e){$("draft-status").textContent="Save failed";throw e;}
- finally{savingPromise=null;}
+$("student-prev").addEventListener("click",()=>{
+ if(studentBusy)return;
+ step=Math.max(0,step-1);updateStep();window.scrollTo({top:130,behavior:"smooth"});
+});
+async function saveDraft(){
+ clearTimeout(saveTimer);
+ if(!accountNeeded()||intakeState!=="open"||draftLoadedFor!==currentUser.uid||submittedApplication)return;
+ const uid=currentUser.uid;
+ const fields=studentFields();
+ const pending=(savingPromise||Promise.resolve()).catch(()=>{}).then(()=>{
+  if(auth.currentUser?.uid!==uid||submittedApplication)throw Error("This application is no longer being edited.");
+  $("draft-status").textContent="Saving…";
+  return call("saveDraft",{fields});
+ });
+ savingPromise=pending;
+ try{
+  await pending;
+  if(savingPromise===pending&&currentUser?.uid===uid)$("draft-status").textContent="Saved securely";
+ }catch(e){
+  if(savingPromise===pending&&currentUser?.uid===uid)$("draft-status").textContent="Save failed";
+  throw e;
+ }finally{
+  if(savingPromise===pending)savingPromise=null;
+ }
 }
-student.addEventListener("input",()=>{
- countEssay();
- if(settings.intakeOpen&&accountNeeded()){clearTimeout(saveTimer);$("draft-status").textContent="Unsaved changes";saveTimer=setTimeout(()=>saveDraft(true),1100);}
-});
-student.addEventListener("change",()=>{toggleGuardian();if(settings.intakeOpen&&accountNeeded()){clearTimeout(saveTimer);saveTimer=setTimeout(()=>saveDraft(true),600);}});
+function scheduleDraftSave(){
+ if(intakeState!=="open"||!accountNeeded()||draftLoadedFor!==currentUser.uid||submittedApplication||studentBusy)return;
+ clearTimeout(saveTimer);
+ $("draft-status").textContent="Unsaved changes";
+ saveTimer=setTimeout(()=>saveDraft().catch(()=>{}),1100);
+}
+student.addEventListener("input",()=>{countEssay();scheduleDraftSave();});
+student.addEventListener("change",()=>{toggleGuardian();scheduleDraftSave();});
 function toggleGuardian(){
- const isAdult=qs('[name="ageBand"]',student).value==="adult";
- $("student-guardian-fields").hidden=isAdult;
+ const isMinor=qs('[name="ageBand"]',student).value==="minor";
+ $("student-guardian-fields").hidden=!isMinor;
+ qsa('input[name="guardianName"],input[name="guardianEmail"]',student).forEach(control=>control.required=isMinor);
 }
 function countEssay(){const t=qs('[name="personalStatement"]',student).value.trim();$("essay-word-count").textContent=(t?t.split(/\s+/).length:0)+" words";}
+async function verifiedEmail(){
+ const user=auth.currentUser;
+ await reload(user);
+ currentUser=user;
+ refreshGates();
+ if(!user.emailVerified)throw Error("Verify your email before submitting. You can resend the verification email from your account page.");
+ await user.getIdToken(true);
+ return user.email?.toLowerCase();
+}
 student.addEventListener("submit",async e=>{
  e.preventDefault();
+ if(studentBusy||step!==6||submittedApplication)return;
+ if(!stepNames.every((_,index)=>validateStep(index)))return;
+ studentBusy=true;refreshGates();
  try{
   whenOpen();if(!accountNeeded())throw Error("Create and sign in to an account first.");
-  await reload(auth.currentUser);
-  if(!auth.currentUser.emailVerified)throw Error("Verify your email before submitting.");
-  if(!validateStep())return;
-  await saveDraft(true);
-  if(!$("student-truth").checked||!$("student-ack").checked)throw Error("Please acknowledge both declarations.");
+  await verifiedEmail();
+  try{await saveDraft();}catch(error){
+   if(!String(error.code).includes("already-exists"))throw error;
+  }
   const result=await call("submitEntry",{type:"self",declarations:{truthful:true,requirements:true}});
-  notify("Official application submitted: "+result.entryId);
-  location.hash="#dashboard";
+  submittedApplication={entryId:result.entryId,type:"self"};
+  clearTimeout(saveTimer);student.reset();
+  showReceipt("student",result.entryId,"self");
  }catch(e){notify(readable(e));}
+ finally{studentBusy=false;refreshGates();}
 });
 
 const nomForm=$("nomination-form");
+nomForm.addEventListener("input",()=>{if(!nominationBusy)nominationRequestId=null;});
 function nominationPrivacy(){
  const privacy=qs('input[name="privacy"]:checked',nomForm)?.value;
  $("nominator-identity").hidden=privacy==="anonymous";
- qsa('#nominator-identity input[name="nominatorName"],#nominator-identity input[name="nominatorEmail"]')
-   .forEach(input=>input.required=privacy!=="anonymous");
+ qsa("#nominator-identity input").forEach(input=>{
+  input.disabled=privacy==="anonymous";
+  input.required=privacy!=="anonymous"&&input.name!=="relationship";
+ });
 }
 qsa('input[name="privacy"]',nomForm).forEach(x=>x.addEventListener("change",nominationPrivacy));
 nominationPrivacy();
 nomForm.addEventListener("submit",async e=>{
  e.preventDefault();
+ if(nominationBusy||!$("nomination-receipt").hidden)return;
+ nominationBusy=true;refreshGates();
  try{
   whenOpen();
   if(!nomForm.reportValidity())return;
@@ -236,24 +360,24 @@ nomForm.addEventListener("submit",async e=>{
   const privacy=get("privacy");
   if(privacy!=="anonymous"){
    if(!accountNeeded())throw Error("Sign in to a verified account to submit a named or confidential nomination.");
-   await reload(auth.currentUser);
-   if(!auth.currentUser.emailVerified||get("nominatorEmail").toLowerCase()!==auth.currentUser.email?.toLowerCase())throw Error("Verify the account email matching your nomination.");
+   if(get("nominatorEmail").toLowerCase()!==await verifiedEmail())throw Error("Use the email address on your verified Beacon account.");
   } else if(!auth.currentUser){await signInAnonymously(auth);}
   const fields={
    studentName:get("studentName"),school:get("school"),grade:get("grade"),
-   graduationYear:get("graduationYear"),state:get("state"),guardianEmail:get("guardianEmail"),
+   graduationYear:get("graduationYear"),state:get("state"),guardianEmail:get("guardianEmail"),applicantEmail:get("applicantEmail"),
    personalStatement:get("personalStatement"),
    references:[{name:get("ref1Name"),email:get("ref1Email")},{name:get("ref2Name"),email:get("ref2Email")}]
   };
+  nominationRequestId||=crypto.randomUUID();
   const out=await call("submitEntry",{
-   type:"nomination",privacy,fields,declaration:get("declaration")==="on",nominatorName:get("nominatorName"),
+   type:"nomination",privacy,fields,requestId:nominationRequestId,declaration:get("declaration")==="on",nominatorName:get("nominatorName"),
    nominatorEmail:get("nominatorEmail"),relationship:get("relationship"),message:get("message")
   });
-  notify("Official nomination recorded. Entry ID: "+out.entryId);
+  nominationRequestId=null;
   nomForm.reset();nominationPrivacy();
-  if(auth.currentUser?.isAnonymous)await signOut(auth);
-  location.hash="#home";
+  showReceipt("nomination",out.entryId);
  }catch(err){notify(readable(err));}
+ finally{nominationBusy=false;refreshGates();}
 });
 
 async function showDashboard(){
@@ -266,9 +390,12 @@ async function showDashboard(){
   const welcome=el("h2","Your Beacon Journey");root.append(welcome);
   const p=el("p","Recognition is more than a certificate. Continue a saved draft or check your official entries.","muted");root.append(p);
   const actions=el("div",undefined,"portal-actions");
-  const link=el("a",draft.draft?"Continue saved application →":"Start student application →","btn btn-gold");link.href="#apply";actions.append(link);root.append(actions);
-  if(draft.draft)root.append(el("p","Draft saved "+timestamp(draft.updatedAt)+". Applications can be edited until final submission.","help"));
   const entries=submitted.entries||[];
+  if(!entries.some(entry=>entry.cycle===settings.cycle)&&intakeState==="open"){
+   const link=el("a",draft.draft?"Continue saved application →":"Start student application →","btn btn-gold");
+   link.href="#apply";actions.append(link);root.append(actions);
+  }
+  if(draft.draft)root.append(el("p","Draft saved "+timestamp(draft.updatedAt)+". Applications can be edited until final submission.","help"));
   if(!entries.length)root.append(el("p","You have no submitted student applications yet.","muted"));
   for(const e of entries){
    const div=el("article",undefined,"entry-row");
@@ -381,9 +508,9 @@ async function loadClaim(){
  }catch(err){info.textContent=readable(err);}
 }
 $("claim-now").addEventListener("click",async()=>{
- if(!accountNeeded()){notify("Sign in or create your Beacon account, then return to the private claim link.");return;}
+ if(!accountNeeded()){location.hash="#account/claim/"+encodeURIComponent(inviteToken||"");return;}
  try{
-  await reload(auth.currentUser);
+  await verifiedEmail();
   const result=await call("claimNomination",{token:inviteToken});
   history.replaceState(null,"",location.pathname+"#dashboard");
   notify("Your nomination is now connected to your Beacon account. No separate application is required.");
@@ -479,11 +606,15 @@ async function openReview(entryId){
   if(d.nominator){core.append(el("h3","Confidential nominator identity — ADMIN ONLY"));core.append(infoRow("Name",d.nominator.name));core.append(infoRow("Email",d.nominator.email));}
   container.append(core);
   const refs=el("section",undefined,"review-card");refs.append(el("h2","References & consent"));
-  (d.referenceSuggestions||[]).forEach((r,i)=>refs.append(infoRow("Reference "+(i+1)+" invited contact",r.name+" • "+r.email)));
+  const referenceLabels=["Academic reference","Character reference"];
+  (d.referenceSuggestions||[]).forEach((r,i)=>{
+   if(r.name||r.email)refs.append(infoRow(referenceLabels[i], [r.name,r.email].filter(Boolean).join(" • ")));
+  });
   for(const r of d.references||[]){
-   refs.append(el("h3","Reference "+(Number(r.slot)+1)+" — "+(r.verified?"Verified":"Awaiting verification")));
-   refs.append(infoRow("Full name",r.fullName));
+   refs.append(el("h3",referenceLabels[r.slot]+" — "+(r.verified?"Verified":"Awaiting verification")));
+   if(r.fullName)refs.append(infoRow("Full name",r.fullName));
    for(let i=0;i<(r.answers||[]).length;i++){refs.append(el("p",prompts[i],"help"));refs.append(el("p",r.answers[i]));}
+   if(!d.canManage)continue;
    if(!r.verified){
     const button=el("button","Confirm reference identity and verify","btn btn-outline");
     button.type="button";button.onclick=()=>action("verifyRequirement",{entryId,kind:"reference",slot:Number(r.slot)},entryId);refs.append(button);
@@ -494,55 +625,63 @@ async function openReview(entryId){
     revoke.type="button";revoke.onclick=()=>action("invalidateReference",{entryId,slot:Number(r.slot),reason:reason.value},entryId);refs.append(revoke);
    }
   }
-  const tools=el("div",undefined,"review-actions");
-  for(let j=0;j<2;j++){const btn=el("button","Create reference "+(j+1)+" invitation","btn btn-outline");btn.type="button";btn.onclick=()=>invitation(entryId,"reference",j);tools.append(btn);}
-  const guardian=el("button","Create guardian consent invitation","btn btn-outline");guardian.type="button";guardian.onclick=()=>invitation(entryId,"guardian",null);tools.append(guardian);
-  if(d.guardianStatus==="signed_pending_verification"){const verify=el("button","Verify guardian authorization","btn btn-outline");verify.type="button";verify.onclick=()=>action("verifyRequirement",{entryId,kind:"guardian"},entryId);tools.append(verify);}
-  if(d.guardianStatus==="verified"||d.guardianStatus==="signed_pending_verification"){
-   const reason=el("textarea");reason.rows=2;reason.maxLength=600;reason.placeholder="Required reason if guardian permission is withdrawn";
-   refs.append(reason);
-   const revoke=el("button","Record guardian consent withdrawal","btn btn-outline");revoke.type="button";
-   revoke.onclick=()=>action("revokeGuardianConsent",{entryId,reason:reason.value},entryId);tools.append(revoke);
+  container.append(refs);
+  if(d.canManage){
+   const tools=el("div",undefined,"review-actions");
+   referenceLabels.forEach((label,slot)=>{
+    const btn=el("button","Invite "+label.toLowerCase(),"btn btn-outline");
+    btn.type="button";btn.onclick=()=>invitation(entryId,"reference",slot);tools.append(btn);
+   });
+   const guardian=el("button","Create guardian consent invitation","btn btn-outline");guardian.type="button";guardian.onclick=()=>invitation(entryId,"guardian",null);tools.append(guardian);
+   if(d.guardianStatus==="signed_pending_verification"){const verify=el("button","Verify guardian authorization","btn btn-outline");verify.type="button";verify.onclick=()=>action("verifyRequirement",{entryId,kind:"guardian"},entryId);tools.append(verify);}
+   if(d.guardianStatus==="verified"||d.guardianStatus==="signed_pending_verification"){
+    const reason=el("textarea");reason.rows=2;reason.maxLength=600;reason.placeholder="Required reason if guardian permission is withdrawn";
+    refs.append(reason);
+    const revoke=el("button","Record guardian consent withdrawal","btn btn-outline");revoke.type="button";
+    revoke.onclick=()=>action("revokeGuardianConsent",{entryId,reason:reason.value},entryId);tools.append(revoke);
+   }
+   refs.append(tools);
+   const manage=el("section",undefined,"review-card");
+   manage.append(el("h2","Administrator: student details and invitations"));
+   manage.append(el("p","Use only confirmed information. Nominations can be submitted before the student's references or guardian contact information are available.","help"));
+   const dataForm=el("form",undefined,"entry-form");
+   dataForm.innerHTML='<div class="field-grid"><label>Nominee contact email <input type="email" name="applicantEmail"></label><label>Guardian email <input type="email" name="guardianEmail"></label><label>Guardian name <input name="guardianName"></label><label>Student age band <select name="ageBand"><option value="">Unknown</option><option value="minor">Under 18</option><option value="adult">18 or older</option></select></label><label>Verified unweighted GPA <input type="number" min="0" max="4" step=".01" name="gpa"></label></div><p>Qualified references</p><div class="field-grid"><label>Academic reference name <input name="ref1Name"></label><label>Academic reference email <input type="email" name="ref1Email"></label><label>Character reference name <input name="ref2Name"></label><label>Character reference email <input type="email" name="ref2Email"></label></div><button class="btn btn-outline" type="submit">Save verified contact details</button>';
+   for(const key of ["applicantEmail","guardianEmail","guardianName","ageBand","gpa"])if(d[key]!==null&&d[key]!==undefined&&dataForm.elements[key])dataForm.elements[key].value=String(d[key]);
+   (d.referenceSuggestions||[]).forEach((v,i)=>{const j=i+1;dataForm.elements["ref"+j+"Name"].value=v.name||"";dataForm.elements["ref"+j+"Email"].value=v.email||"";});
+   dataForm.addEventListener("submit",async e=>{
+    e.preventDefault();const f=new FormData(dataForm);
+    await action("updateEntryContacts",{entryId,fields:{
+     applicantEmail:f.get("applicantEmail"),guardianEmail:f.get("guardianEmail"),guardianName:f.get("guardianName"),
+     ageBand:f.get("ageBand"),gpa:f.get("gpa"),
+     references:[{name:f.get("ref1Name"),email:f.get("ref1Email")},{name:f.get("ref2Name"),email:f.get("ref2Email")}]
+    }},entryId);
+   });
+   manage.append(dataForm);
+   if(d.type==="nomination"){
+    const mergeBox=el("div",undefined,"review-actions");
+    const destLabel=el("label","Merge this nomination into another entry (destination application ID)");
+    const dest=el("input");dest.placeholder="Destination entry ID";dest.maxLength=140;
+    destLabel.append(dest);mergeBox.append(destLabel);
+    const merge=el("button","Merge as supporting endorsement","btn btn-outline");merge.type="button";
+    merge.onclick=async()=>{
+     if(!dest.value.trim())return notify("Enter the destination entry ID.");
+     if(!confirm("Merge this nomination into "+dest.value.trim()+"? Confirm the student records truly represent the same person."))return;
+     try{await call("mergeNomination",{sourceEntryId:entryId,destinationEntryId:dest.value.trim()});notify("Nomination linked as an endorsement. The original entry remains in the audit trail.");showCommittee();}
+     catch(e){notify(readable(e));}
+    };
+    mergeBox.append(merge);manage.append(mergeBox);
+   }
+   const claimBtn=el("button","Generate student account-claim invitation","btn btn-outline");
+   claimBtn.type="button";claimBtn.onclick=()=>invitation(entryId,"scholar",null);manage.append(claimBtn);
+   if(d.type==="nomination"&&d.nominator?.email){
+    referenceLabels.forEach((label,slot)=>{
+     const btn=el("button","Verify nominator as "+label.toLowerCase(),"btn btn-outline");btn.type="button";
+     btn.onclick=()=>{if(confirm("I independently verified this nominator's identity and eligibility to serve as this reference."))action("useVerifiedNominatorReference",{entryId,slot,identityVerified:true},entryId);};
+     manage.append(btn);
+    });
+   }
+   container.append(manage);
   }
-  refs.append(tools);container.append(refs);
-  const manage=el("section",undefined,"review-card");
-  manage.append(el("h2","Administrator: student details and invitations"));
-  manage.append(el("p","Use only confirmed information. Nominations can be submitted before the student's references or guardian contact information are available.","help"));
-  const dataForm=el("form",undefined,"entry-form");
-  dataForm.innerHTML='<div class="field-grid"><label>Nominee contact email <input type="email" name="applicantEmail"></label><label>Guardian email <input type="email" name="guardianEmail"></label><label>Guardian name <input name="guardianName"></label><label>Student age band <select name="ageBand"><option value="">Unknown</option><option value="minor">Under 18</option><option value="adult">18 or older</option></select></label><label>Verified unweighted GPA <input type="number" min="0" max="4" step=".01" name="gpa"></label></div><p>Qualified references</p><div class="field-grid"><label>Reference 1 name <input name="ref1Name"></label><label>Reference 1 email <input type="email" name="ref1Email"></label><label>Reference 2 name <input name="ref2Name"></label><label>Reference 2 email <input type="email" name="ref2Email"></label></div><button class="btn btn-outline" type="submit">Save verified contact details</button>';
-  for(const key of ["applicantEmail","guardianEmail","guardianName","ageBand","gpa"])if(d[key]!==null&&d[key]!==undefined&&dataForm.elements[key])dataForm.elements[key].value=String(d[key]);
-  (d.referenceSuggestions||[]).forEach((v,i)=>{const j=i+1;dataForm.elements["ref"+j+"Name"].value=v.name||"";dataForm.elements["ref"+j+"Email"].value=v.email||"";});
-  dataForm.addEventListener("submit",async e=>{
-   e.preventDefault();const f=new FormData(dataForm);
-   await action("updateEntryContacts",{entryId,fields:{
-    applicantEmail:f.get("applicantEmail"),guardianEmail:f.get("guardianEmail"),guardianName:f.get("guardianName"),
-    ageBand:f.get("ageBand")||"minor",gpa:f.get("gpa"),
-    references:[{name:f.get("ref1Name"),email:f.get("ref1Email")},{name:f.get("ref2Name"),email:f.get("ref2Email")}]
-   }},entryId);
-  });
-  manage.append(dataForm);
-  if(d.type==="nomination"){
-   const mergeBox=el("div",undefined,"review-actions");
-   const destLabel=el("label","Merge this nomination into another entry (destination application ID)");
-   const dest=el("input");dest.placeholder="Destination entry ID";dest.maxLength=140;
-   destLabel.append(dest);mergeBox.append(destLabel);
-   const merge=el("button","Merge as supporting endorsement","btn btn-outline");merge.type="button";
-   merge.onclick=async()=>{
-    if(!dest.value.trim())return notify("Enter the destination entry ID.");
-    if(!confirm("Merge this nomination into "+dest.value.trim()+"? Confirm the student records truly represent the same person."))return;
-    try{await call("mergeNomination",{sourceEntryId:entryId,destinationEntryId:dest.value.trim()});notify("Nomination linked as an endorsement. The original entry remains in the audit trail.");showCommittee();}
-    catch(e){notify(readable(e));}
-   };
-   mergeBox.append(merge);manage.append(mergeBox);
-  }
-  const claimBtn=el("button","Generate student account-claim invitation","btn btn-outline");
-  claimBtn.type="button";claimBtn.onclick=()=>invitation(entryId,"scholar",null);manage.append(claimBtn);
-  if(d.type==="nomination"&&d.nominator?.email){
-   const btn=el("button","Verify qualified nominator as reference 1","btn btn-outline");btn.type="button";
-   btn.onclick=()=>{if(confirm("I independently verified this nominator's identity and eligibility to serve as a reference."))action("useVerifiedNominatorReference",{entryId,slot:0,identityVerified:true},entryId);};
-   manage.append(btn);
-  }
-  container.append(manage);
   const control=el("section",undefined,"review-card");control.append(el("h2","Committee governance"));
   control.innerHTML+= '<p class="help">Scoring: Character 30 • Perseverance 25 • Service 20 • Leadership 15 • Potential 10. Three to five distinct reviews are required to finalize a selection.</p>';
   const reviewForm=el("form",undefined,"entry-form");reviewForm.innerHTML=

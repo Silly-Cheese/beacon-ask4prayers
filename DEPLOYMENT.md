@@ -1,57 +1,41 @@
-# GitHub Pages + Firebase Deployment
+# Launch Beacon Scholars intake
 
-This repository intentionally DOES NOT include Firebase Hosting. The public website runs on GitHub Pages; backend Cloud Functions run in Firebase.
+GitHub Pages serves [Beacon Scholars](https://beacon.ask4prayers.com/) from the repository’s `main` branch and root folder. Firebase project `beacon-ask4prayers` supplies Authentication, Cloud Functions and Firestore. The same server flag opens both applications and nominations for the Class of 2027. Set it back to `false` and redeploy Functions to pause both paths.
 
-## GitHub Pages
-1. Go to repository **Settings → Pages**.
-2. Select **Deploy from a branch**, **main**, **/(root)**, Save.
-3. Set **Custom domain** to **beacon.ask4prayers.com**.
-4. DNS: add \`CNAME\` record **beacon** → **silly-cheese.github.io** (not a repo path).
-5. Enable **Enforce HTTPS** after domain verification and certificate issuance.
-6. Verify \`https://beacon.ask4prayers.com\` resolves to this site. DNS changes are not performed by this repository.
+## Firebase setup
 
-## Firebase project
-Install Firebase CLI; run from repository root:
-\`\`\`powershell
-npm install -g firebase-tools
-firebase login
-firebase use --add
-# Choose beacon-ask4prayers and use alias default
-cd functions
-npm install
-cd ..
-firebase deploy --only firestore:rules,storage,functions
-\`\`\`
-If \`firebase use --add\` is inconvenient use \`firebase deploy --project beacon-ask4prayers --only firestore:rules,storage,functions\`.
+- In [Firebase Authentication](https://console.firebase.google.com/project/beacon-ask4prayers/authentication/providers), enable Email/Password for applicants and named or confidential nominators, and Anonymous for anonymous nominations. Authorize `beacon.ask4prayers.com` for Auth.
+- In [Firebase App Check](https://console.firebase.google.com/project/beacon-ask4prayers/appcheck), verify that the web app is registered with the reCAPTCHA Enterprise site key used in `firebase.js` and that the live domain is allowed by that key. Submissions and draft operations require App Check.
+- Ensure the Firestore database exists. Use the existing Firebase custom claims to assign a program administrator and the selection committee. The administrator can issue private guardian and reference links for manual delivery or queue them through the configured Trigger Email extension.
 
-## Console configuration
-- Authentication → Sign-in method: enable **Email/Password** and **Anonymous**.
-- Authentication → Settings → Authorized domains: add \`beacon.ask4prayers.com\` and \`silly-cheese.github.io\` as appropriate.
-- Firestore: provision the database.
-- App Check: register the web app with **reCAPTCHA Enterprise**, then put the public site key into \`firebase.js\` (\`APP_CHECK_SITE_KEY\`). Enable enforcement only after testing, and enforce for Cloud Functions before public intake.
-- For administrator/reviewer access, assign Firebase Authentication **custom claims** using an authorized server or administrative process. Never assign these claims through browser JavaScript.
+## Deploy and open
 
-## IMPORTANT: submissions are disabled by default
-The Cloud Function \`submitEntry\` checks \`BEACON_INTAKE_OPEN\` and requires a valid App Check token, even when callable function App Check is not globally enforced. With the provided \`functions/.env.example\` as a guide, create \`functions/.env\` locally (ignored by Git) and keep \`BEACON_INTAKE_OPEN=false\` until ALL required verification and safeguarding processes are implemented and approved.
+From the repository root in PowerShell:
 
-The first-stage intake stores a submitted entry securely but **does not send reference requests, obtain guardian consent, issue letters, or finalize selections**. Build and test these workflows before accepting real minors' personal data. Do not tell applicants these steps have occurred when they have not.
+```powershell
+npx.cmd --yes firebase-tools@latest login
+npm.cmd --prefix functions install
+```
 
-## Data security
-\`firestore.rules\` and \`storage.rules\` deny all browser reads/writes by default. All confidential operations must be validated in Cloud Functions using Admin SDK. Public source files must never contain private student data, service-account keys, or email API tokens.
+Set `BEACON_INTAKE_OPEN=true` in `functions/.env.beacon-ask4prayers` (or in your existing `functions/.env` if that is where you manage production settings). Keep any existing mail setting and other Firebase configuration in the same file. To pause intake while validating production, deploy first with the value `false` and repeat with `true` when ready.
 
-## Testing
-- Sign up, email verification, sign in/out, reset password.
-- Confirm submission blocked when intake is off.
-- Register App Check and confirm invalid/no app token rejected.
-- Test valid application and nomination in emulator with fixtures.
-- Verify a regular user cannot query \`entries\`, consent, or references directly.
-- Verify only custom-claim reviewers can read committee queue.
-- Test mobile layouts and keyboard access.
+```powershell
+npx.cmd --yes firebase-tools@latest deploy --project beacon-ask4prayers --only "functions,firestore:rules"
+```
 
-## Future development (not yet delivered)
-- Guardian invitation & verifiable consent; student participation and separate publicity consent.
-- Two reference invitation forms and identity/email verification.
-- Student invitation acceptance for nominations; anonymous nomination moderation.
-- Committee decision rubric, conflict recusals, and audit logs.
-- Scholar credential, PDF letter/certificate generation, mailing address and secure verification.
-- Email service integration; records retention and verified deletion workflows.
+Storage is unused by intake. GitHub Pages publishes the frontend.
+
+## Verify production
+
+Call the public status endpoint from PowerShell:
+
+```powershell
+Invoke-RestMethod -Method Post `
+  -Uri 'https://us-central1-beacon-ask4prayers.cloudfunctions.net/getProgramSettings' `
+  -ContentType 'application/json' -Body '{"data":{}}' |
+  Select-Object -ExpandProperty result
+```
+
+Expect `cycle: 2027`, `intakeOpen: True`, and `honoraryOnly: True` after launch. On the live site, verify that both entry pages show as open. Use fictional data to test a verified student saving and submitting, an anonymous nomination, and a named nomination after sign-in. Confirm each receipt appears in the committee queue, then verify a private guardian and reference invitation through completion. Reviewers should see reference responses without names, signatures, email addresses or confidential nominator records.
+
+If the status endpoint returns 404, check that `getProgramSettings` appears under Functions in the correct project and region. If the status is open but submissions fail, check App Check metrics and the relevant Auth provider before changing the launch flag.

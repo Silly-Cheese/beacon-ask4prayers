@@ -20,13 +20,13 @@
 - Optional outbound email via Firebase Trigger Email extension (SMTP configuration required).
 - Responsive main-site-matched design and GitHub Actions syntax validation.
 
-## Safe operational state
-**PUBLIC INTAKE REMAINS CLOSED BY DEFAULT.** The admin must deploy backend changes, configure App Check and authorized accounts, finalize program policies, and validate student/guardian/reference workflows before enabling it. GitHub publication does not open forms by itself.
+## Intake and deployment
+The Class of 2027 accepts direct applications and official nominations when the Firebase Functions environment sets `BEACON_INTAKE_OPEN=true`. See [DEPLOYMENT.md](DEPLOYMENT.md) for the launch command and live verification. Both entry forms use the same server flag and issue a confirmation with a private entry ID.
 
 The program starts as **honorary recognition only**. Bibles Within Reach comes first; any eventual $500–$10,000-funded awards are speculative and must never be represented as already available or guaranteed. Letters and certificates do not promise funding. Donors do not select recipients.
 
 ## Setup and verification
-See [IMPLEMENTATION.md](IMPLEMENTATION.md) for the latest operational checklist, hosting instructions, emails, custom claim roles, consent safeguards and known readiness limitations.
+See [IMPLEMENTATION.md](IMPLEMENTATION.md) for data collections, email configuration, custom claims, and committee operations.
 
 ## Security notes
 Student data is restricted to privileged server-side Cloud Functions. Firestore and Storage rules deny browser direct access to private collections. Functions use Firebase App Check and Firebase Authentication where required. Do not commit service-account keys, secret provider credentials, unredacted student applications or API secrets.

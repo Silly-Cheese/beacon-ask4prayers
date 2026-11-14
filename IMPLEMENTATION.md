@@ -8,7 +8,7 @@ Repository: \`Silly-Cheese/beacon-ask4prayers\` • GitHub Pages: \`beacon.ask4p
 - Seven application sections: identity, academic journey, character/service, personal essay, two references, guardian, review.
 - Drafts autosave to Firestore through App Check-protected callable functions; protected from all direct client Firestore reads and writes. Resuming a draft requires account sign-in.
 - Official nominations: named, confidential or fully anonymous. Nominees **do not** have to reapply. Fully anonymous nominators cannot serve as verified references.
-- Private one-time invitations for two character references and guardian consent; recipient responses are recorded and require administrative identity checks before being marked verified.
+- Private one-time invitations for one academic and one character reference and guardian consent; recipient responses are recorded and require administrative identity checks before being marked verified.
 - Nominated students can claim their existing entry using an email-bound invite token and their own verified Firebase account.
 - Review queue, 100-point rubric, conflict recusals, 3–5 committee reviews, administrator eligibility decisions, conditional final decisions and audit logs.
 - Selection record, Scholar Passport, print-ready founder-signed-name letter and certificate, optional personalized note, digital/mail preference.
@@ -16,6 +16,8 @@ Repository: \`Silly-Cheese/beacon-ask4prayers\` • GitHub Pages: \`beacon.ask4p
 - Program decisions are independent of donors.
 
 ## Deployment, first steps
+
+See [DEPLOYMENT.md](DEPLOYMENT.md) for the current launch and verification commands.
 1. Verify GitHub Pages uses main/root and HTTPS for beacon.ask4prayers.com.
 2. Configure Firebase Authentication: Email/Password and Anonymous providers; authorize beacon.ask4prayers.com.
 3. Register reCAPTCHA Enterprise **score-based** web key in Firebase App Check. The public site key is now stored as a quoted string in \`firebase.js\` under \`APP_CHECK_SITE_KEY\`. Confirm it matches the Firebase App Check registration; the console does not update this file automatically. Never place a secret API key/service account into source code.
