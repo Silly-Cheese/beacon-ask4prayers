@@ -425,44 +425,86 @@ nomForm.addEventListener("submit",async e=>{
  finally{nominationBusy=false;refreshGates();}
 });
 
+const statusLabels={
+ submitted:"Submitted",screening:"Eligibility screening",under_review:"Under review",selected:"Selected",
+ not_selected:"Not selected",withdrawn:"Withdrawn",merged:"Merged",verified:"Verified",
+ pending:"Pending",not_required:"Not required",signed_pending_verification:"Awaiting verification",
+ awaiting_verification:"Awaiting verification"
+};
+const statusText=value=>statusLabels[value]||String(value||"Pending").replace(/_/g," ");
+const entryType=entry=>entry.type==="nomination"?"Nomination":"Application";
+function statusBadge(value){
+ const badge=el("span",statusText(value),"workspace-status");
+ badge.dataset.status=value||"pending";
+ return badge;
+}
+function workspaceCard(title,description){
+ const panel=el("section",undefined,"workspace-card");
+ panel.append(el("h2",title));
+ if(description)panel.append(el("p",description,"muted"));
+ return panel;
+}
+function workspaceLink(label,href,kind="btn-outline"){
+ const link=el("a",label,"btn "+kind);link.href=href;return link;
+}
+function entryRow(entry,buttonLabel,onClick){
+ const row=el("article",undefined,"entry-row workspace-entry");
+ const info=el("div");
+ info.append(el("h3",entry.studentName),el("p",entryType(entry)+" · "+entry.cycle+(entry.grade?" · Grade "+entry.grade:"")));
+ const actions=el("div",undefined,"workspace-actions");
+ const button=el("button",buttonLabel,"btn btn-outline");button.type="button";button.onclick=onClick;
+ actions.append(statusBadge(entry.status),button);
+ row.append(info,actions);
+ return row;
+}
+function workspaceFacts(facts){
+ const list=el("dl",undefined,"workspace-facts");
+ for(const [label,value] of facts){
+  const cell=el("div");
+  cell.append(el("dt",label),el("dd",String(value??"—")));
+  list.append(cell);
+ }
+ return list;
+}
 async function showDashboard(){
  const root=$("dashboard-content");root.replaceChildren();
- if(!accountNeeded()){root.innerHTML='<h2>Sign in to continue</h2><p>Student accounts keep drafts and submitted applications private.</p><a href="#account" class="btn btn-gold">Sign in or create an account</a>';return;}
+ if(!accountNeeded()){
+  const gate=workspaceCard("Sign in to continue","Your drafts and submitted entries are linked to your Beacon account.");
+  gate.append(workspaceLink("Sign in or create an account","#account/dashboard","btn-gold"));root.append(gate);return;
+ }
  root.textContent="Loading your Beacon record…";
  try{
   const [draft,submitted]=await Promise.all([call("getDraft"),call("getMyEntries")]);
-  root.replaceChildren();
-  const welcome=el("h2","Your Beacon Journey");root.append(welcome);
-  const p=el("p","Recognition is more than a certificate. Continue a saved draft or check your official entries.","muted");root.append(p);
-  const actions=el("div",undefined,"portal-actions");
   const entries=submitted.entries||[];
-  if(!entries.some(entry=>entry.cycle===settings.cycle)&&intakeState==="open"){
-   const link=el("a",draft.draft?"Continue saved application →":"Start student application →","btn btn-gold");
-   link.href="#apply";actions.append(link);root.append(actions);
+  root.replaceChildren();
+  const currentEntry=entries.find(entry=>entry.cycle===settings.cycle);
+  if(!currentEntry){
+   const start=workspaceCard(draft.draft?"Saved application":"Apply for recognition",
+    draft.draft?(draft.updatedAt?"Last saved "+timestamp(draft.updatedAt)+".":"Your progress is saved."):
+    "Enter the Class of "+settings.cycle+" selection cycle.");
+   if(intakeState==="open")start.append(workspaceLink(draft.draft?"Resume application":"Start application","#apply","btn-gold"));
+   else start.append(el("p","Applications are "+(intakeState==="closed"?"currently closed.":"currently unavailable."),"help"));
+   root.append(start);
   }
-  if(draft.draft)root.append(el("p","Draft saved "+timestamp(draft.updatedAt)+". Applications can be edited until final submission.","help"));
-  if(!entries.length)root.append(el("p","You have no submitted student applications yet.","muted"));
-  for(const e of entries){
-   const div=el("article",undefined,"entry-row");
-   div.append(el("strong",e.studentName+" — "+e.cycle));
-   div.append(el("span","Application "+e.entryId+" • "+e.status.replace(/_/g," ")));
-   div.append(el("span","References: "+e.referenceStatus+" · Guardian: "+e.guardianStatus));
-   const btn=el("button","View details","btn btn-outline");btn.type="button";
-   btn.addEventListener("click",async()=>{try{const item=await call("getMyEntry",{entryId:e.entryId});showEntryDetails(root,item.entry);}catch(err){notify(readable(err));}});
-   div.append(btn);
-   if(e.status==="selected"){const a=el("a","Open Scholar Passport →","text-link");a.href="#scholar";div.append(a);}
-   root.append(div);
+  const list=workspaceCard("Submitted entries");
+  if(!entries.length)list.append(el("p","You haven’t submitted an entry yet.","muted"));
+  for(const entry of entries){
+   list.append(entryRow(entry,"View details",async()=>{
+    try{const {entry:record}=await call("getMyEntry",{entryId:entry.entryId});showEntryDetails(root,record);}
+    catch(error){notify(readable(error));}
+   }));
   }
+  root.append(list);
  }catch(e){root.textContent=readable(e);}
 }
-function showEntryDetails(root,d){
- let panel=$("application-detail");if(panel)panel.remove();
- panel=el("div",undefined,"review-card");panel.id="application-detail";
- panel.append(el("h2","Application "+d.entryId));
- panel.append(el("p","Current status: "+d.status.replace(/_/g," ")));
- panel.append(el("p","References: "+d.referenceStatus+" • Guardian: "+d.guardianStatus));
- panel.append(el("p","Your committee reviews and confidential reference statements are not public.","help"));
- if(d.status==="selected"){const a=el("a","View your Scholar Passport and recognition documents →","btn btn-gold");a.href="#scholar";panel.append(a);}
+function showEntryDetails(root,entry){
+ $("application-detail")?.remove();
+ const panel=workspaceCard(entry.studentName);panel.id="application-detail";
+ panel.append(workspaceFacts([
+  ["Entry",entryType(entry)],["Status",statusText(entry.status)],["References",statusText(entry.referenceStatus)],
+  ["Guardian permission",statusText(entry.guardianStatus)],["Entry ID",entry.entryId]
+ ]));
+ if(entry.status==="selected")panel.append(workspaceLink("Open Scholar Passport","#scholar","btn-gold"));
  root.append(panel);panel.scrollIntoView({behavior:"smooth",block:"nearest"});
 }
 
@@ -531,34 +573,38 @@ async function showScholar(){
   activeScholarId=selected.entryId;
   const record=(await call("getMyEntry",{entryId:activeScholarId})).entry;
   root.replaceChildren();
-  root.append(el("h2","Beacon Scholar • "+record.cycle));
-  root.append(infoRow("Scholar ID",record.publicId));
-  root.append(el("p","Your selection is an honorary distinction. Documents are available digitally; no cash award or future funding is promised.","muted"));
+  const recognition=workspaceCard(record.recognitionName||record.studentName,"Beacon Scholar · Class of "+record.cycle);
+  recognition.classList.add("recognition-card");
+  recognition.append(workspaceFacts([["Scholar ID",record.publicId]]));
+  const grid=el("div",undefined,"workspace-columns");
+  const delivery=workspaceCard("Delivery preferences");
+  const milestonePanel=workspaceCard("Private milestones","Keep a record of service, leadership, and personal growth.");
+  grid.append(delivery,milestonePanel);
+  root.append(recognition,grid);
   const form=el("form",undefined,"entry-form");form.id="scholar-settings";
   form.innerHTML='<div class="field-grid"><label>Recognition name <input name="recognitionName" maxlength="120" required></label><label>Delivery preference <select name="deliveryPreference"><option value="digital">Digital</option><option value="mail">Mail physical copies</option></select></label></div><div id="scholar-address" class="field-grid" hidden><label>Address or P.O. Box <input name="line1"></label><label>Apt / Unit <input name="line2"></label><label>City <input name="city"></label><label>State <input name="state"></label><label>ZIP <input name="zip"></label></div><label class="check-label"><input type="checkbox" name="publicityConsent"> Allow optional public recognition where all required guardian permissions are on file.</label><button class="btn btn-outline" type="submit">Save delivery preferences</button>';
   form.elements.recognitionName.value=record.recognitionName||record.studentName;
   form.elements.deliveryPreference.value=record.deliveryPreference||"digital";
   if(record.address){
    for(const field of ["line1","line2","city","state","zip"])form.elements[field].value=record.address[field]||"";
-   $("scholar-address").hidden=form.elements.deliveryPreference.value!=="mail";
   }
-  form.elements.deliveryPreference.addEventListener("change",()=>{$("scholar-address").hidden=form.elements.deliveryPreference.value!=="mail";});
+  const addressFields=qs("#scholar-address",form);
+  addressFields.hidden=form.elements.deliveryPreference.value!=="mail";
+  form.elements.deliveryPreference.addEventListener("change",()=>{addressFields.hidden=form.elements.deliveryPreference.value!=="mail";});
   form.addEventListener("submit",async e=>{
    e.preventDefault();const d=new FormData(form);
    try{await call("saveScholarPreferences",{entryId:activeScholarId,recognitionName:d.get("recognitionName"),deliveryPreference:d.get("deliveryPreference"),address:{line1:d.get("line1"),line2:d.get("line2"),city:d.get("city"),state:d.get("state"),zip:d.get("zip")},publicityConsent:d.has("publicityConsent")});notify("Scholar preferences saved securely.");await showScholar();}catch(err){notify(readable(err));}
   });
-  root.append(form);
-  root.append(el("h3","Milestones & achievements"));
-  root.append(el("p","Record meaningful service, academic accomplishments, leadership experiences or personal growth. These milestones remain private until explicitly reviewed and approved.","muted"));
-  const milestones=el("div",undefined,"portal-grid");
+  delivery.append(form);
+  const milestones=el("div",undefined,"workspace-stack milestone-list");
   for(const item of record.milestones||[]){
-   const card=el("article",undefined,"portal-tile");
+   const card=el("article",undefined,"milestone-card");
    card.append(el("h3",item.title));card.append(el("p",item.details));
    card.append(el("span",item.date+" • "+(item.verified?"Verified milestone":"Personal milestone"),"help"));
    milestones.append(card);
   }
   if(!(record.milestones||[]).length)milestones.append(el("p","No milestones recorded yet.","muted"));
-  root.append(milestones);
+  milestonePanel.append(milestones);
   const milestoneForm=el("form",undefined,"entry-form");
   milestoneForm.innerHTML='<h3>Add a private milestone</h3><label>Milestone title <input name="title" minlength="5" maxlength="140" required></label><label>Date <input type="date" name="date" required></label><label>What happened and why does it matter? <textarea name="details" rows="4" minlength="10" maxlength="800" required></textarea></label><button class="btn btn-outline" type="submit">Save milestone</button>';
   milestoneForm.addEventListener("submit",async e=>{
@@ -566,11 +612,11 @@ async function showScholar(){
    try{await call("addMilestone",{entryId:activeScholarId,title:d.get("title"),date:d.get("date"),details:d.get("details")});notify("Milestone saved.");showScholar();}
    catch(err){notify(readable(err));}
   });
-  root.append(milestoneForm);
-  const verifyLink=el("a","Verify this Scholar ID →","text-link");verifyLink.href="#verify/"+encodeURIComponent(record.publicId);root.append(verifyLink);
-  const toolbar=el("div",undefined,"portal-actions");
+  milestonePanel.append(milestoneForm);
+  const verifyLink=workspaceLink("Verify Scholar ID","#verify/"+encodeURIComponent(record.publicId));
+  const toolbar=el("div",undefined,"workspace-actions");
   const printLetter=el("button","Print official letter","btn btn-gold"),printCert=el("button","Print certificate","btn btn-outline");
-  toolbar.append(printLetter,printCert);root.append(toolbar);
+  toolbar.append(printLetter,printCert,verifyLink);recognition.append(toolbar);
   const name=escaped(record.recognitionName||record.studentName);
   const id=escaped(record.publicId);
   const letter=congratulationsLetter(record);
@@ -578,7 +624,7 @@ async function showScholar(){
   certificate.innerHTML='<div class="paper-kicker">THE PRAYER PROJECT</div><div class="paper-seal">✦</div><h2>BEACON SCHOLARS</h2><h3>CERTIFICATE OF RECOGNITION</h3><p>Presented with distinction to</p><h2 class="recipient-name">'+name+'</h2><p>In recognition of exceptional character, promise, perseverance, and the potential to make a meaningful difference.</p><h3>Beacon Scholar • Class of '+escaped(record.cycle)+'</h3><div class="paper-divider"></div><div class="signature">Christopher Shelley</div><p>Founder, The Prayer Project</p><small>Recognition ID: '+id+' · beacon.ask4prayers.com</small>';
   printLetter.onclick=()=>printDocument(letter);
   printCert.onclick=()=>printDocument(certificate);
-  root.append(letter,certificate);
+
  }catch(e){root.textContent=readable(e);}
 }
 
@@ -642,15 +688,17 @@ for(const kind of ["reference","consent"]){
 }
 
 function renderIntakeControls(program){
- const panel=el("section",undefined,"review-card intake-controls");
+ const panel=el("section",undefined,"review-card intake-controls workspace-card");
  const status=el("p");status.setAttribute("role","status");
  const button=el("button",undefined,"btn btn-gold");button.type="button";
  const error=el("p",undefined,"intake-error");error.setAttribute("role","alert");error.hidden=true;
- const actions=el("div",undefined,"button-row");
+ const actions=el("div",undefined,"workspace-actions");
  for(const [label,path] of [["View application","#apply"],["View nomination","#nominate"]]){
   const link=el("a",label,"btn btn-outline");link.href=path;actions.append(link);
  }
- panel.append(el("h2","Applications and nominations"),status,button,error,actions);
+ const overview=el("div",undefined,"workspace-card-heading");
+ const copy=el("div");copy.append(el("h2","Applications and nominations"),status);
+ overview.append(copy,button);panel.append(overview,error,actions);
  const render=()=>{
   status.textContent=program.intakeOpen?"Open for the Class of "+program.cycle+".":"Closed for the Class of "+program.cycle+".";
   button.textContent=program.intakeOpen?"Close applications and nominations":"Open applications and nominations";
@@ -669,56 +717,69 @@ function renderIntakeControls(program){
 
 async function showCommittee(){
  const box=$("committee-content"),detail=$("review-detail");
- box.textContent="Checking access…";detail.replaceChildren();
- if(!accountNeeded()){box.innerHTML='<p>Sign in with an authorized committee account.</p><a href="#account/committee" class="btn btn-gold">Sign in</a>';return;}
+ reviewRequest++;
+ box.hidden=false;detail.hidden=true;detail.replaceChildren();box.textContent="Checking access…";
+ if(!accountNeeded()){
+  const gate=workspaceCard("Committee sign-in","Use your authorized reviewer or administrator account.");
+  gate.append(workspaceLink("Sign in","#account/committee","btn-gold"));box.replaceChildren(gate);return;
+ }
+ const uid=currentUser.uid;
  try{
   const result=await call("listReviewQueue");
+  if(currentUser?.uid!==uid)return;
   box.replaceChildren();
   if(result.intake)box.append(renderIntakeControls(result.intake));
-  box.append(el("h2","Selection Registry — "+settings.cycle));
-  box.append(el("p","Private review queue. No student information should be exported or publicly shared.","help"));
-  const counts={total:result.entries?.length||0,nominations:0,underReview:0,selected:0};
-  for(const entry of result.entries||[]){
-   if(entry.type==="nomination")counts.nominations++;
-   if(entry.status==="under_review")counts.underReview++;
-   if(entry.status==="selected")counts.selected++;
+  const entries=result.entries||[];
+  const queue=workspaceCard("Selection queue");
+  const stats=el("div",undefined,"workspace-stats");
+  for(const [label,count] of [
+   ["Recent entries",entries.length],["Nominations",entries.filter(e=>e.type==="nomination").length],
+   ["Under review",entries.filter(e=>e.status==="under_review").length],["Selected",entries.filter(e=>e.status==="selected").length]
+  ]){
+   const tile=el("div");tile.append(el("strong",String(count)),el("span",label));stats.append(tile);
   }
-  const stats=el("div",undefined,"portal-grid");
-  for(const [label,count] of [["Entries in recent queue",counts.total],["Nominations",counts.nominations],["Under review",counts.underReview],["Selected",counts.selected]]){
-   const tile=el("div",undefined,"portal-tile");tile.append(el("h3",String(count)));tile.append(el("p",label));stats.append(tile);
-  }
-  box.append(stats);
-  if(!result.entries?.length)box.append(el("p","No entries have been submitted."));
-  for(const item of result.entries||[]){
-   const line=el("article",undefined,"entry-row");
-   line.append(el("strong",item.studentName+" • Grade "+item.grade));
-   line.append(el("span",item.type+" / "+item.status+" / "+item.entryId));
-   const btn=el("button","Open Selection File","btn btn-outline");btn.type="button";
-   btn.onclick=()=>openReview(item.entryId);line.append(btn);box.append(line);
-  }
- }catch(e){box.textContent=readable(e);}
+  queue.append(stats);
+  if(!entries.length)queue.append(el("p","No entries have been submitted.","muted"));
+  for(const item of entries)queue.append(entryRow(item,"Open Selection File",()=>openReview(item.entryId)));
+  box.append(queue);
+ }catch(e){
+  if(currentUser?.uid===uid)box.replaceChildren(workspaceCard("Committee access",readable(e)));
+ }
 }
+function reviewField(label,placeholder,rows,maxLength,value=""){
+ const field=el("label",label,"workspace-field");
+ const input=el("textarea");input.rows=rows;input.maxLength=maxLength;input.placeholder=placeholder;input.value=value;
+ field.append(input);
+ return {field,input};
+}
+let reviewRequest=0;
 async function openReview(entryId){
- const container=$("review-detail");container.textContent="Loading selection file…";
+ const container=$("review-detail"),queue=$("committee-content");
+ const request=++reviewRequest,uid=currentUser?.uid;
+ queue.hidden=true;container.hidden=false;
+ const back=el("button","← Selection queue","link-button workspace-back");back.type="button";
+ back.onclick=()=>{showCommittee();$("committee-view").scrollIntoView({block:"start"});};
+ container.replaceChildren(back,el("p","Loading selection file…","muted"));
  try{
   const result=await call("getReviewEntry",{entryId}),d=result.entry;
-  container.replaceChildren();
-  const core=el("section",undefined,"review-card");
-  core.append(el("h2",d.studentName+" — Grade "+d.grade));
+  if(request!==reviewRequest||currentUser?.uid!==uid||location.hash!=="#committee")return;
+  container.replaceChildren(back);
+  const core=workspaceCard(d.studentName);
+  const summary=el("div",undefined,"workspace-card-heading");
+  summary.append(el("p",entryType(d)+(d.grade?" · Grade "+d.grade:""),"muted"),statusBadge(d.status));
+  core.append(summary);
   const letters=committeeLetterActions(d);
   if(letters)core.append(letters);
-  core.append(infoRow("Application ID",d.entryId));
-  core.append(infoRow("Entry pathway",d.type));
-  core.append(infoRow("Current status",d.status));
-  core.append(infoRow("School",d.school));
-  core.append(infoRow("Reported GPA",d.gpa===null?"Not reported":d.gpa));
-  core.append(infoRow("Eligibility confirmed",d.verifiedEligibility?"Yes":"No"));
-  core.append(infoRow("References",d.referenceCount+" verified / 2 required"));
-  core.append(infoRow("Guardian consent",d.guardianStatus));
-  core.append(infoRow("Committee reviews",d.reviewCount+" recorded • "+d.approveVotes+" recommending selection"));
+  core.append(workspaceFacts([
+   ["School",d.school||"—"],["Reported GPA",d.gpa??"Not reported"],["Eligibility",d.verifiedEligibility?"Verified":"Pending"],
+   ["References",d.referenceCount+" of 2 verified"],["Guardian consent",statusText(d.guardianStatus)],
+   ["Committee reviews",d.reviewCount+" recorded · "+d.approveVotes+" recommend selection"],["Entry ID",d.entryId]
+  ]));
+  const story=el("div",undefined,"review-story");
   for(const [key,label] of [["personalStatement","Essay or nomination"],["academicInterests","Academic interests"],["futureGoals","Future goals"],["service","Community service"],["activities","Leadership and activities"],["responsibilities","Responsibilities and personal growth"],["additionalInfo","Additional context"]]){
-   if(d[key]){core.append(el("h3",label));core.append(el("p",d[key]));}
+   if(d[key])story.append(el("h3",label),el("p",d[key]));
   }
+  if(story.childElementCount)core.append(story);
   if(d.duplicateCount>1){core.append(el("p","Potential duplicate entries: "+d.duplicateCount+" records share the same student name, school and graduation year. Review without assuming they are duplicates.","callout"));}
   if((d.endorsements||[]).length){
    core.append(el("h3","Supporting nominations ("+d.endorsements.length+")"));
@@ -729,7 +790,8 @@ async function openReview(entryId){
   }
   if(d.nominator){core.append(el("h3","Confidential nominator identity — ADMIN ONLY"));core.append(infoRow("Name",d.nominator.name));core.append(infoRow("Email",d.nominator.email));}
   container.append(core);
-  const refs=el("section",undefined,"review-card");refs.append(el("h2","References & consent"));
+  const refs=workspaceCard("References and consent");
+  refs.id="review-references";
   const referenceLabels=["Academic reference","Character reference"];
   (d.referenceSuggestions||[]).forEach((r,i)=>{
    if(r.name||r.email)refs.append(infoRow(referenceLabels[i], [r.name,r.email].filter(Boolean).join(" • ")));
@@ -743,8 +805,8 @@ async function openReview(entryId){
     const button=el("button","Confirm reference identity and verify","btn btn-outline");
     button.type="button";button.onclick=()=>action("verifyRequirement",{entryId,kind:"reference",slot:Number(r.slot)},entryId);refs.append(button);
    }else{
-    const reason=el("textarea");reason.rows=2;reason.maxLength=600;reason.placeholder="Required reason to invalidate this verified reference";
-    refs.append(reason);
+    const {field,input:reason}=reviewField("Reason for invalidation","Explain why this reference is being invalidated",2,600);
+    refs.append(field);
     const revoke=el("button","Invalidate reference "+(Number(r.slot)+1),"btn btn-outline");
     revoke.type="button";revoke.onclick=()=>action("invalidateReference",{entryId,slot:Number(r.slot),reason:reason.value},entryId);refs.append(revoke);
    }
@@ -759,14 +821,14 @@ async function openReview(entryId){
    const guardian=el("button","Create guardian consent invitation","btn btn-outline");guardian.type="button";guardian.onclick=()=>invitation(entryId,"guardian",null);tools.append(guardian);
    if(d.guardianStatus==="signed_pending_verification"){const verify=el("button","Verify guardian authorization","btn btn-outline");verify.type="button";verify.onclick=()=>action("verifyRequirement",{entryId,kind:"guardian"},entryId);tools.append(verify);}
    if(d.guardianStatus==="verified"||d.guardianStatus==="signed_pending_verification"){
-    const reason=el("textarea");reason.rows=2;reason.maxLength=600;reason.placeholder="Required reason if guardian permission is withdrawn";
-    refs.append(reason);
+    const {field,input:reason}=reviewField("Reason for consent withdrawal","Describe the guardian’s request",2,600);
+    refs.append(field);
     const revoke=el("button","Record guardian consent withdrawal","btn btn-outline");revoke.type="button";
     revoke.onclick=()=>action("revokeGuardianConsent",{entryId,reason:reason.value},entryId);tools.append(revoke);
    }
    refs.append(tools);
-   const manage=el("section",undefined,"review-card");
-   manage.append(el("h2","Administrator: student details and invitations"));
+   const manage=workspaceCard("Student details and invitations");
+   manage.id="review-student-details";
    manage.append(el("p","Use only confirmed information. Nominations can be submitted before the student's references or guardian contact information are available.","help"));
    const dataForm=el("form",undefined,"entry-form");
    dataForm.innerHTML='<div class="field-grid"><label>Nominee contact email <input type="email" name="applicantEmail"></label><label>Guardian email <input type="email" name="guardianEmail"></label><label>Guardian name <input name="guardianName"></label><label>Student age band <select name="ageBand"><option value="">Unknown</option><option value="minor">Under 18</option><option value="adult">18 or older</option></select></label><label>Verified unweighted GPA <input type="number" min="0" max="4" step=".01" name="gpa"></label></div><p>Qualified references</p><div class="field-grid"><label>Academic reference name <input name="ref1Name"></label><label>Academic reference email <input type="email" name="ref1Email"></label><label>Character reference name <input name="ref2Name"></label><label>Character reference email <input type="email" name="ref2Email"></label></div><button class="btn btn-outline" type="submit">Save verified contact details</button>';
@@ -782,7 +844,7 @@ async function openReview(entryId){
    });
    manage.append(dataForm);
    if(d.type==="nomination"){
-    const mergeBox=el("div",undefined,"review-actions");
+    const mergeBox=el("div",undefined,"workspace-subsection");
     const destLabel=el("label","Merge this nomination into another entry (destination application ID)");
     const dest=el("input");dest.placeholder="Destination entry ID";dest.maxLength=140;
     destLabel.append(dest);mergeBox.append(destLabel);
@@ -795,24 +857,26 @@ async function openReview(entryId){
     };
     mergeBox.append(merge);manage.append(mergeBox);
    }
+   const invitations=el("div",undefined,"workspace-actions");
    const claimBtn=el("button","Generate student account-claim invitation","btn btn-outline");
-   claimBtn.type="button";claimBtn.onclick=()=>invitation(entryId,"scholar",null);manage.append(claimBtn);
+   claimBtn.type="button";claimBtn.onclick=()=>invitation(entryId,"scholar",null);invitations.append(claimBtn);
    if(d.type==="nomination"&&d.nominator?.email){
     referenceLabels.forEach((label,slot)=>{
      const btn=el("button","Verify nominator as "+label.toLowerCase(),"btn btn-outline");btn.type="button";
      btn.onclick=()=>{if(confirm("I independently verified this nominator's identity and eligibility to serve as this reference."))action("useVerifiedNominatorReference",{entryId,slot,identityVerified:true},entryId);};
-     manage.append(btn);
+     invitations.append(btn);
     });
    }
+   manage.append(invitations);
    container.append(manage);
   }
-  const control=el("section",undefined,"review-card");control.append(el("h2","Committee governance"));
-  control.innerHTML+= '<p class="help">Scoring: Character 30 • Perseverance 25 • Service 20 • Leadership 15 • Potential 10. Three to five distinct reviews are required to finalize a selection.</p>';
+  const control=workspaceCard("Independent evaluation","Score each criterion and record your recommendation. Final decisions require three to five distinct reviews.");
+  control.id="review-evaluation";
   const reviewForm=el("form",undefined,"entry-form");reviewForm.innerHTML=
-  '<div class="field-grid">'+[
+  '<div class="rubric-grid">'+[
    ["character","Character & integrity",30],["perseverance","Perseverance & growth",25],["service","Service & compassion",20],["leadership","Leadership & initiative",15],["potential","Purpose & potential",10]
   ].map(([key,label,max])=>'<label>'+label+' / '+max+'<input type="number" name="'+key+'" min="0" max="'+max+'" required value="'+(d.myReview?.scores?.[key]??0)+'"></label>').join("")+
-  '</div><label>Committee recommendation <select name="recommend"><option value="discuss">Discuss further</option><option value="select">Recommend selection</option><option value="decline">Do not recommend</option></select></label><label>Independent reviewer notes <textarea name="notes" rows="5" maxlength="2400"></textarea></label><button type="submit" class="btn btn-gold">Record Independent Evaluation</button>';
+  '</div><label>Committee recommendation <select name="recommend"><option value="discuss">Discuss further</option><option value="select">Recommend selection</option><option value="decline">Do not recommend</option></select></label><label>Independent reviewer notes <textarea name="notes" rows="5" maxlength="2400"></textarea></label><button type="submit" class="btn btn-gold">Save evaluation</button>';
   reviewForm.elements.recommend.value=d.myReview?.recommend||"discuss";
   reviewForm.elements.notes.value=d.myReview?.notes||"";
   reviewForm.addEventListener("submit",async e=>{
@@ -821,26 +885,62 @@ async function openReview(entryId){
    await action("recordReview",{entryId,scores,recommend:f.get("recommend"),notes:f.get("notes")},entryId);
   });
   control.append(reviewForm);
-  const conflict=el("textarea");conflict.placeholder="Reason for recusal (conflict of interest)";conflict.rows=2;conflict.maxLength=400;
-  control.append(conflict);
-  const recuse=el("button","Recuse myself from this entry","btn btn-outline");recuse.type="button";recuse.onclick=()=>action("recuse",{entryId,reason:conflict.value},entryId);control.append(recuse);
-  const elig=el("div",undefined,"review-actions");
-  const note=el("textarea");note.placeholder="Eligibility verification notes";note.rows=2;note.maxLength=1000;control.append(note);
-  for(const [label,eligible] of [["Mark eligible",true],["Return to eligibility screening",false]]){
-   const btn=el("button",label,"btn btn-outline");btn.type="button";btn.onclick=()=>action("setEligibility",{entryId,eligible,notes:note.value},entryId);elig.append(btn);
+  const recusal=el("details",undefined,"workspace-subsection");
+  const {field:conflictField,input:conflict}=reviewField("Reason for recusal","Describe the conflict of interest",2,400);
+  const recuse=el("button","Recuse myself from this entry","btn btn-outline");
+  recuse.type="button";recuse.onclick=()=>action("recuse",{entryId,reason:conflict.value},entryId);
+  recusal.append(el("summary","Conflict of interest"),conflictField,recuse);
+  control.append(recusal);
+  if(d.canManage&&!["selected","not_selected","merged","withdrawn"].includes(d.status)){
+   const adminTools=el("div",undefined,"workspace-columns");
+   adminTools.id="review-admin-actions";
+   const eligibility=workspaceCard("Eligibility");
+   const {field:noteField,input:note}=reviewField("Verification notes","Record how eligibility was verified",3,1000);
+   const eligibilityActions=el("div",undefined,"workspace-actions");
+   for(const [label,eligible] of [["Mark eligible",true],["Return to screening",false]]){
+    const btn=el("button",label,"btn btn-outline");btn.type="button";
+    btn.onclick=()=>action("setEligibility",{entryId,eligible,notes:note.value},entryId);
+    eligibilityActions.append(btn);
+   }
+   eligibility.append(noteField,eligibilityActions);
+   const decisionCard=workspaceCard("Final decision");
+   const {field:founderField,input:founder}=reviewField("Founder’s note (optional)","Write a message for the recognition letter",3,3400,d.founderNote||"");
+   const decisions=el("div",undefined,"workspace-actions");
+   for(const [label,decision] of [["Approve Beacon Scholar","select"],["Finalize as not selected","decline"]]){
+    const button=el("button",label,decision==="select"?"btn btn-gold":"btn btn-outline");
+    button.type="button";
+    button.onclick=async()=>{
+     if(confirm("Finalize this decision for "+d.studentName+"? The decision will be locked."))
+      await action("finalizeDecision",{entryId,decision,founderNote:founder.value},entryId);
+    };
+    decisions.append(button);
+   }
+   decisionCard.append(founderField,decisions);
+   adminTools.append(eligibility,decisionCard);
+   container.append(control,adminTools);
+  }else{
+   container.append(control);
   }
-  control.append(elig);
-  const founder=el("textarea");founder.placeholder="Founder's optional personal message for selected Scholar (will appear in recognition letter)";founder.maxLength=3400;founder.rows=6;founder.value=d.founderNote||"";
-  control.append(el("h3","Founder's recognition note"));control.append(founder);
-  const decisions=el("div",undefined,"review-actions");
-  for(const [label,decision] of [["Approve Beacon Scholar","select"],["Finalize not selected","decline"]]){
-   const b=el("button",label,decision==="select"?"btn btn-gold":"btn btn-outline");b.type="button";
-   b.onclick=async()=>{if(!confirm("Finalize "+decision+" for "+d.studentName+"? This decision will be locked."))return;await action("finalizeDecision",{entryId,decision,founderNote:founder.value},entryId);};
-   decisions.append(b);
+  const shortcuts=el("nav",undefined,"review-shortcuts");
+  shortcuts.setAttribute("aria-label","Selection file sections");
+  for(const [label,id] of [["References","review-references"],["Student details","review-student-details"],["Evaluation","review-evaluation"],["Eligibility and decision","review-admin-actions"]]){
+   const target=$(id);
+   if(!target)continue;
+   const button=el("button",label,"link-button");button.type="button";
+   button.onclick=()=>{
+    const heading=qs("h2",target);
+    heading.tabIndex=-1;heading.focus({preventScroll:true});
+    target.scrollIntoView({behavior:"smooth",block:"start"});
+   };
+   shortcuts.append(button);
   }
-  control.append(decisions);container.append(control);
+  summary.after(shortcuts);
+  back.focus({preventScroll:true});
   container.scrollIntoView({behavior:"smooth",block:"start"});
- }catch(e){container.textContent=readable(e);}
+ }catch(e){
+  if(request===reviewRequest&&currentUser?.uid===uid)container.replaceChildren(back,workspaceCard("Selection file",readable(e)));
+ }
+
 }
 async function action(name,payload,entryId){
  try{const result=await call(name,payload);notify("Saved: "+name);if(result.publicId)notify("Scholar recognition created: "+result.publicId);await openReview(entryId);}
