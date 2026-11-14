@@ -338,6 +338,9 @@ input::placeholder,textarea::placeholder{color:#938577}
 }
 .nomination-entry-key code { overflow-wrap: anywhere; }
 @media print {
+  #print-document .nomination-letter h2 { font-size: 25pt; margin-bottom: .16in; }
+  #print-document .nomination-letter > p { font-size: 11pt; line-height: 1.42; margin-bottom: .12in; }
+  #print-document .nomination-letter .paper-divider { margin: .13in 0; }
   #print-document .nomination-letter-steps { font-size: 10.5pt; line-height: 1.35; }
   #print-document .nomination-letter-steps p { font-size: 10.5pt; line-height: 1.35; margin: .12in 0; }
   #print-document .nomination-entry-key { break-inside: avoid; }

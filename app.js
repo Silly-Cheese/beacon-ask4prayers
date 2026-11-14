@@ -627,6 +627,7 @@ function nominationLetter(record,entryKey,includeFollowUp){
  if(includeFollowUp)paragraphs.push("Your nomination is already your official entry. If you would like to continue, follow the steps below. Beacon will use your follow-up to request the required forms and confirm eligibility.");
  const closing="With warm congratulations,";
  const sheet=studentLetter("Congratulations on your Beacon nomination",record.studentName,paragraphs,closing,"Beacon Scholars · Class of "+record.cycle);
+ sheet.classList.add("nomination-letter");
  if(!includeFollowUp)return sheet;
  const next=el("section",undefined,"nomination-letter-steps");
  next.append(el("h3","Continue your nomination"));
