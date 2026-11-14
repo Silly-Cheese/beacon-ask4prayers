@@ -210,17 +210,20 @@ exports.submitEntry=onCall(opts,async r=>{
  const receipt=requestId?db.collection("nominationReceipts").doc(hash(cycle+":"+requestId)):null;
  const doc=db.collection("entries").doc();
  const day=new Date().toISOString().slice(0,10);
- // Limit nominations per authenticated account, including anonymous Firebase accounts.
- const quota=db.collection("submissionQuotas").doc(hash(r.auth.uid+day));
+ // A signed-in administrator can process multiple nominations. Public submissions keep the daily limit.
+ const isVerifiedAdmin=isAdmin(r)&&r.auth.token.email_verified===true&&r.auth.token.firebase?.sign_in_provider!=="anonymous";
+ const quota=isVerifiedAdmin?null:db.collection("submissionQuotas").doc(hash(r.auth.uid+day));
  const entryId=await db.runTransaction(async tx=>{
   if(receipt){
    const prior=await tx.get(receipt);
    if(prior.exists)return prior.get("entryId");
   }
   await requireOpenIntake(tx);
-  const q=await tx.get(quota),n=Number(q.data()?.count||0);
-  if(n>=2)throw new HttpsError("resource-exhausted","Daily nomination limit reached.");
-  tx.set(quota,{count:n+1,updatedAt:stamp()},{merge:true});
+  if(quota){
+   const q=await tx.get(quota),count=Number(q.data()?.count||0);
+   if(count>=2)throw new HttpsError("resource-exhausted","This account has submitted two nominations today. You can submit another after midnight UTC.");
+   tx.set(quota,{count:count+1,updatedAt:stamp()},{merge:true});
+  }
   if(receipt)tx.create(receipt,{entryId:doc.id,createdAt:stamp()});
   tx.create(doc,{
    ...d,personalStatement:d.personalStatement,type:"nomination",privacy,nominator,
