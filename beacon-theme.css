@@ -390,3 +390,39 @@ input::placeholder,textarea::placeholder{color:#938577}
   #public-view .hero h1 { font-size: clamp(2.6rem, 10vw, 3.4rem); }
   #public-view .hero-art { height: 190px; }
 }
+
+.home-class .hero-star { top: 42%; }
+.home-class-caption {
+  position: absolute;
+  inset: auto 1rem 1.8rem;
+  display: grid;
+  gap: .2rem;
+  text-align: center;
+  color: var(--gold-strong);
+}
+.home-class-caption strong { font: 700 clamp(1.25rem, 2.6vw, 1.9rem)/1.2 var(--serif); }
+.home-class-caption span { color: var(--muted); font-size: .85rem; }
+.home-finalist-card { border-color: #967752; background: linear-gradient(145deg, #221a12, #100e0c 78%); }
+.home-start .home-utility { margin-top: 1.35rem; }
+.public-guide-heading { max-width: 52rem; margin-bottom: clamp(1.8rem, 4vw, 3rem); }
+.public-guide-heading p { font-size: clamp(1rem, 2vw, 1.18rem); }
+.public-guide-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; align-items: start; }
+.public-guide-grid .workspace-card p:last-child,
+.public-timeline .workspace-card p:last-child { margin-bottom: 0; }
+.public-timeline {
+  display: grid;
+  gap: .85rem;
+  padding: 0 0 0 1.7rem;
+  margin: 0;
+  max-width: 53rem;
+}
+.public-timeline li::marker { color: var(--gold); font-weight: 700; }
+#faq-view { max-width: 52rem; }
+#faq-view details > .text-link { margin-top: 0; }
+@media (max-width: 760px) {
+  .public-guide-grid { grid-template-columns: 1fr; }
+}
+@media (max-width: 620px) {
+  .home-class .hero-star { font-size: 4rem; top: 36%; }
+  .home-class-caption { bottom: 1.1rem; }
+}

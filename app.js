@@ -5,7 +5,7 @@ import {
 } from "https://www.gstatic.com/firebasejs/13.1.0/firebase-auth.js";
 const $=id=>document.getElementById(id),qs=(s,root=document)=>root.querySelector(s),qsa=(s,root=document)=>[...root.querySelectorAll(s)];
 const call=async(name,data={})=>(await callable(name)(data)).data;
-const PAGE={home:"public-view",mission:"public-view",selection:"public-view",opportunities:"public-view",faq:"public-view",apply:"apply-view",nominate:"nominate-view",account:"account-view",dashboard:"dashboard-view",scholar:"scholar-view",committee:"committee-view",policy:"policy-view",reference:"reference-view",consent:"consent-view",claim:"claim-view",verify:"verify-view"};
+const PAGE={home:"public-view",mission:"mission-view",selection:"selection-view",recognition:"recognition-view",faq:"faq-view",apply:"apply-view",nominate:"nominate-view",account:"account-view",dashboard:"dashboard-view",scholar:"scholar-view",committee:"committee-view",policy:"policy-view",reference:"reference-view",consent:"consent-view",claim:"claim-view",verify:"verify-view"};
 let currentUser=null,settings={cycle:"2027",intakeOpen:false},intakeState="loading",step=0;
 let draftLoadedFor=null,draftLoading=null,saveTimer=null,savingPromise=null,inviteToken=null,activeScholarId=null;
 let studentBusy=false,nominationBusy=false,nominationRequestId=null,submittedApplication=null,accountReturn="dashboard";
@@ -36,7 +36,7 @@ function whenOpen(){
 function accountNeeded(){return !!currentUser&&!currentUser.isAnonymous;}
 function route(dashboardEntryId){
  const [key,...parts]=(location.hash.slice(1)||"home").split("/");
- const page=Object.hasOwn(PAGE,key)?key:"home";
+ const page=key==="opportunities"?"recognition":Object.hasOwn(PAGE,key)?key:"home";
  if(page==="account"){
   const target=parts.join("/");
   accountReturn=/^(apply|nominate|dashboard|committee|claim)$|^claim\/[A-Za-z0-9_-]{43}$/.test(target)?target:"dashboard";
@@ -52,8 +52,7 @@ function route(dashboardEntryId){
  $("main-nav").classList.remove("open");$("menu-toggle").setAttribute("aria-expanded","false");
  qsa("#main-nav a").forEach(a=>a.removeAttribute("aria-current"));
  qsa('#main-nav a[href="#'+page+'"]').forEach(a=>a.setAttribute("aria-current","page"));
- if(["mission","selection","opportunities","faq"].includes(page))requestAnimationFrame(()=>$(page).scrollIntoView({behavior:"smooth",block:"start"}));
- else window.scrollTo({top:0,behavior:"instant"});
+ window.scrollTo({top:0,behavior:"instant"});
  if(page==="apply")prepareApplication();
  if(page==="dashboard")showDashboard(typeof dashboardEntryId==="string"?dashboardEntryId:null);
  if(page==="committee")showCommittee();
