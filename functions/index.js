@@ -257,7 +257,7 @@ exports.getReviewEntry=onCall(opts,async r=>{
      nominator:isAdmin(r)?v.get("nominator"):null,
      sourceEntryId:isAdmin(r)?v.get("sourceEntryId"):null
    })),
-   reviewCount:votes.size,approveVotes:votes.docs.filter(x=>x.get("recommend")==="select").length,
+   reviewCount:votes.size,decisionMethod:isAdmin(r)?d.decisionMethod||null:null,approveVotes:votes.docs.filter(x=>x.get("recommend")==="select").length,
    myReview:votes.docs.find(x=>x.id===r.auth.uid)?.data()||null,
    recusalCount:recusals.size,
    founderNote:isAdmin(r)?d.founderNote||"":"",
@@ -427,32 +427,51 @@ exports.verifyRequirement=onCall(opts,async r=>{
 exports.finalizeDecision=onCall(opts,async r=>{
  owner(r);
  const id=str(r.data?.entryId,140),decision=str(r.data?.decision,20),note=str(r.data?.founderNote,3400);
+ if(!id||id.includes("/"))err("Choose an entry.");
  if(!["select","decline"].includes(decision))err("Invalid decision.");
- const entry=db.collection("entries").doc(id),snap=await entry.get();
- if(!snap.exists)throw new HttpsError("not-found","Entry not found.");
- const d=snap.data();
- if(["selected","not_selected","merged","withdrawn"].includes(d.status))throw new HttpsError("failed-precondition","Entry cannot be finalized.");
- if(decision==="select"&&d.entryKeyHash&&!d.nominationFollowUp?.requestedAt)
-  throw new HttpsError("failed-precondition","The nominee must connect their Entry Key and submit their follow-up details first.");
- if(!d.verifiedEligibility)throw new HttpsError("failed-precondition","Eligibility must be verified first.");
- const votes=await entry.collection("reviews").get();
- if(votes.size<3||votes.size>5)throw new HttpsError("failed-precondition","Require 3–5 independent committee reviews.");
- if(decision==="select"&&votes.docs.filter(x=>x.get("recommend")==="select").length<2)throw new HttpsError("failed-precondition","Selection needs at least two favorable recommendations.");
- if(decision==="select"&&(d.referenceCount||0)<2)throw new HttpsError("failed-precondition","Two verified references are required.");
- if(decision==="select"&&d.ageBand!=="adult"&&d.guardianStatus!=="verified")throw new HttpsError("failed-precondition","Guardian consent must be verified.");
- const publicId="BCN-"+cycle+"-"+id.slice(0,8).toUpperCase();
- await entry.update({status:decision==="select"?"selected":"not_selected",decision,selectedAt:decision==="select"?stamp():null,
-  publicId:decision==="select"?publicId:null,founderNote:decision==="select"?note:"",lastUpdatedAt:stamp()});
- await audit("decision_finalized",id,r.auth.uid,{decision});
- if(mailEnabled.value()==="true"&&d.applicantEmail){
-  await db.collection("mail").add({to:[d.applicantEmail],createdAt:stamp(),message:{
-   subject:decision==="select"?"Beacon Scholars: Recognition Decision":"Beacon Scholars: Application Decision",
-   text:decision==="select"?
-     "Congratulations. You have been selected as a Beacon Scholar. Sign in at "+origin+" to review your recognition. Recognition is honorary, with no financial award promised.":
-     "Thank you for your Beacon Scholars submission. Following committee review, your entry was not selected this cycle. We appreciate your story and your willingness to be considered."
-  }});
- }
- return {ok:true,publicId:decision==="select"?publicId:null};
+ const method=r.data?.reviewMethod??"committee";
+ if(!["committee","founder"].includes(method))err("Choose a review method.");
+ const entry=db.collection("entries").doc(id);
+ return db.runTransaction(async tx=>{
+  const snap=await tx.get(entry);
+  if(!snap.exists)throw new HttpsError("not-found","Entry not found.");
+  const d=snap.data();
+  if(entryClosed(d.status))throw new HttpsError("failed-precondition","Entry cannot be finalized.");
+  if(decision==="select"&&d.entryKeyHash&&!d.nominationFollowUp?.requestedAt)
+   throw new HttpsError("failed-precondition","The nominee must connect their Entry Key and submit their follow-up details first.");
+  if(!d.verifiedEligibility)throw new HttpsError("failed-precondition","Eligibility must be verified first.");
+  if(decision==="select"&&(d.referenceCount||0)<2)throw new HttpsError("failed-precondition","Two verified references are required.");
+  if(decision==="select"&&d.ageBand!=="adult"&&d.guardianStatus!=="verified")throw new HttpsError("failed-precondition","Guardian consent must be verified.");
+  const [votes,recusal]=await Promise.all([
+   tx.get(entry.collection("reviews")),tx.get(entry.collection("recusals").doc(r.auth.uid))
+  ]);
+  if(recusal.exists)throw new HttpsError("permission-denied","You recused yourself from this entry.");
+  if(method==="founder"){
+   if(votes.size>=3)throw new HttpsError("failed-precondition","Use the committee decision once three evaluations are on file.");
+   const evaluation=votes.docs.find(vote=>vote.id===r.auth.uid);
+   if(evaluation?.get("recommend")!==decision)
+    throw new HttpsError("failed-precondition","Save your own evaluation with a recommendation that matches this decision.");
+  }else{
+   if(votes.size<3||votes.size>5)throw new HttpsError("failed-precondition","Committee decisions require 3–5 evaluations. With fewer than three, save your evaluation and use Founder review.");
+   if(decision==="select"&&votes.docs.filter(vote=>vote.get("recommend")==="select").length<2)
+    throw new HttpsError("failed-precondition","Selection needs at least two favorable recommendations.");
+  }
+  const selected=decision==="select",publicId=selected?"BCN-"+cycle+"-"+id.slice(0,8).toUpperCase():null;
+  tx.update(entry,{status:selected?"selected":"not_selected",decision,decisionMethod:method,decidedBy:r.auth.uid,
+   selectedAt:selected?stamp():null,publicId,founderNote:selected?note:"",lastUpdatedAt:stamp()});
+  tx.create(db.collection("auditLogs").doc(),{
+   action:"decision_finalized",entryId:id,actorUid:r.auth.uid,at:stamp(),decision,decisionMethod:method,reviewCount:votes.size
+  });
+  if(mailEnabled.value()==="true"&&d.applicantEmail){
+   tx.create(db.collection("mail").doc(),{to:[d.applicantEmail],createdAt:stamp(),message:{
+    subject:selected?"Beacon Scholars: Recognition Decision":"Beacon Scholars: Application Decision",
+    text:selected?
+      "Congratulations. You have been selected as a Beacon Scholar. Sign in at "+origin+" to review your recognition. Recognition is honorary, with no financial award promised.":
+      "Thank you for your Beacon Scholars submission. Following committee review, your entry was not selected this cycle. We appreciate your story and your willingness to be considered."
+   }});
+  }
+  return {ok:true,publicId};
+ });
 });
 exports.saveScholarPreferences=onCall(opts,async r=>{
  requireAuth(r);

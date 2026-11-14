@@ -14,7 +14,7 @@
 - Named, confidential and fully anonymous official nominations. A nomination counts as a complete entry; no separate student application required.
 - Two references, guardian information, individualized invitation links, response forms and controlled administrative verification.
 - Nominated student can claim an existing nomination with a verified-email invitation.
-- Restricted Selection Committee: candidate file, private reviews, 100-point rubric, 3–5 reviewers, recusals, documented eligibility and decisions.
+- Restricted Selection Committee: candidate file, private reviews, 100-point rubric, founder and committee decisions, recusals, and documented eligibility.
 - Scholar Passport: selected Scholar ID, printable official letter and certificate, founder personal note, delivery preference and private achievements.
 - Public Scholar ID verification without disclosing non-consenting students' names.
 - Optional outbound email via Firebase Trigger Email extension (SMTP configuration required).

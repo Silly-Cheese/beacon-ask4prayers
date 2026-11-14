@@ -10,7 +10,7 @@ Repository: \`Silly-Cheese/beacon-ask4prayers\` • GitHub Pages: \`beacon.ask4p
 - Official nominations: named, confidential or fully anonymous. Nominees **do not** have to reapply. Fully anonymous nominators cannot serve as verified references.
 - Private one-time invitations for one academic and one character reference and guardian consent; recipient responses are recorded and require administrative identity checks before being marked verified.
 - Nominated students can claim their existing entry using an email-bound invite token and their own verified Firebase account.
-- Review queue, 100-point rubric, conflict recusals, 3–5 committee reviews, administrator eligibility decisions, conditional final decisions and audit logs.
+- Review queue, 100-point rubric, conflict recusals, founder or committee review, administrator eligibility decisions, conditional final decisions and audit logs.
 - Selection record, Scholar Passport, print-ready founder-signed-name letter and certificate, optional personalized note, digital/mail preference.
 - Future opportunity categories and acknowledgment of **recognition-only** status. Bibles Within Reach precedes any separate Beacon fundraising; possible future awards of $500–$10,000 are purely speculative and must not be marketed as funded.
 - Program decisions are independent of donors.
@@ -25,7 +25,7 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) for the current launch and verification comma
    **Do not deploy Firebase Hosting.**
 4. Open or close both entry forms from the Committee page as a Beacon administrator.
 5. Optionally install Firebase **Trigger Email** extension configured to watch the private \`mail\` collection. Set up SMTP with verified FROM address in the extension. Then set \`BEACON_EMAIL_ENABLED=true\` in Functions environment before deployment to queue invitation and decision messages. Without it, authorized admins generate private URLs for secure manual delivery; do not imply an email was sent.
-6. Use Google Cloud Application Default Credentials in a trusted environment and the server-only role script to designate one program administrator and 3–5 independent reviewers. Example in a terminal where ADC has been securely configured:
+6. Use Google Cloud Application Default Credentials in a trusted environment and the server-only role script to designate a program administrator and add independent reviewers as they become available. Example in a terminal where ADC has been securely configured:
    \`node grant-role.cjs admin@example.org admin\`
    \`node grant-role.cjs reviewer@example.org reviewer\`
    Do not run the role script from a public website, do not commit credentials. Make sure \`firebase-admin\` is available from the current working directory (run \`npm install\` under the functions folder and run script from there with \`node ../scripts/grant-role.cjs\`).
@@ -68,5 +68,5 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) for the current launch and verification comma
 ## Operations and fairness
 - The program operates in annual cycles, initially 2027.
 - Two verified references; guardian approval when under 18; no automatic public exposure.
-- 3–5 reviewers independently review; administrators make the documented final decision.
+- Committee decisions use 3–5 independent evaluations, including two recommendations for selection when selecting a Scholar. With fewer than three evaluations, a non-recused administrator can finalize using their own saved, matching recommendation. Beacon records this as a founder review.
 - Future Bibles Within Reach completion and fundraising do not affect today's honorary-only selections.

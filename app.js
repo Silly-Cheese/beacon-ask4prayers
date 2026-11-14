@@ -910,6 +910,7 @@ async function openReview(entryId){
    ["References",d.referenceCount+" of 2 verified"],["Guardian consent",statusText(d.guardianStatus)],
    ["Committee reviews",d.reviewCount+" recorded · "+d.approveVotes+" recommend selection"],["Entry ID",d.entryId]
   ]));
+  if(d.decisionMethod)core.append(infoRow("Decision method",d.decisionMethod==="founder"?"Founder review":"Committee review"));
   const story=el("div",undefined,"review-story");
   for(const [key,label] of [["personalStatement","Essay or nomination"],["academicInterests","Academic interests"],["futureGoals","Future goals"],["service","Community service"],["activities","Leadership and activities"],["responsibilities","Responsibilities and personal growth"],["additionalInfo","Additional context"]]){
    if(d[key])story.append(el("h3",label),el("p",d[key]));
@@ -1008,7 +1009,10 @@ async function openReview(entryId){
    manage.append(invitations);
    container.append(manage);
   }
-  const control=workspaceCard("Independent evaluation","Score each criterion and record your recommendation. Final decisions require three to five distinct reviews.");
+  const founderReview=d.canManage&&d.reviewCount<3;
+  const control=workspaceCard("Independent evaluation",founderReview
+   ?"Score each criterion and save your recommendation. You can then use Founder review to finalize the same decision."
+   :"Score each criterion and record your recommendation.");
   control.id="review-evaluation";
   const reviewForm=el("form",undefined,"entry-form");reviewForm.innerHTML=
   '<div class="rubric-grid">'+[
@@ -1042,15 +1046,21 @@ async function openReview(entryId){
     eligibilityActions.append(btn);
    }
    eligibility.append(noteField,eligibilityActions);
-   const decisionCard=workspaceCard("Final decision");
+   const decisionCard=workspaceCard("Final decision",founderReview
+    ?"Founder review is available while fewer than three evaluations are on file. Your saved recommendation must match the decision."
+    :"Committee review requires three to five evaluations and two favorable recommendations for selection.");
+   if(founderReview&&d.myReview?.recommend!=="select"&&d.myReview?.recommend!=="decline")
+    decisionCard.append(el("p","Save an evaluation that recommends selection or non-selection to continue.","help"));
    const {field:founderField,input:founder}=reviewField("Founder’s note (optional)","Write a message for the recognition letter",3,3400,d.founderNote||"");
    const decisions=el("div",undefined,"workspace-actions");
    for(const [label,decision] of [["Approve Beacon Scholar","select"],["Finalize as not selected","decline"]]){
     const button=el("button",label,decision==="select"?"btn btn-gold":"btn btn-outline");
     button.type="button";
+    button.disabled=founderReview&&d.myReview?.recommend!==decision;
     button.onclick=async()=>{
-     if(confirm("Finalize this decision for "+d.studentName+"? The decision will be locked."))
-      await action("finalizeDecision",{entryId,decision,founderNote:founder.value},entryId);
+     const method=founderReview?"Founder review":"Committee review";
+     if(confirm("Finalize this decision for "+d.studentName+" through "+method+"? The decision will be locked."))
+      await action("finalizeDecision",{entryId,decision,founderNote:founder.value,reviewMethod:founderReview?"founder":"committee"},entryId);
     };
     decisions.append(button);
    }
