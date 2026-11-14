@@ -467,11 +467,60 @@ function showEntryDetails(root,d){
 }
 
 function infoRow(label,value){const p=el("p");const b=el("strong",label+": ");p.append(b,document.createTextNode(String(value||"—")));return p;}
-function showScholarDocument(target){
- const root=$("scholar-content");
- qsa(".paper-document",root).forEach(n=>n.classList.remove("print-target"));
- const node=qs("#"+target,root);node?.classList.add("print-target");
- window.print();
+function printDocument(sheet){
+ const area=$("print-document");
+ area.replaceChildren(sheet.cloneNode(true));
+ const clear=()=>area.replaceChildren();
+ window.addEventListener("afterprint",clear,{once:true});
+ try{window.print();}
+ catch(error){window.removeEventListener("afterprint",clear);clear();throw error;}
+}
+function studentLetter(title,name,paragraphs,closing,footer){
+ const sheet=el("article",undefined,"paper-document student-letter");
+ sheet.append(
+  el("div","THE PRAYER PROJECT • BEACON SCHOLARS","paper-kicker"),
+  el("div",undefined,"paper-divider"),
+  el("h2",title),
+  el("p","Dear "+name+","),
+  ...paragraphs.map(paragraph=>el("p",paragraph)),
+  el("p",closing),
+  el("div","Christopher Shelley","signature"),
+  el("p","Founder, The Prayer Project"),
+  el("div",undefined,"paper-divider"),
+  el("small",footer+" · beacon.ask4prayers.com")
+ );
+ return sheet;
+}
+function congratulationsLetter(record){
+ const paragraphs=[
+  "Congratulations! It is my pleasure to recognize you as a Beacon Scholar in the Class of "+record.cycle+".",
+  "The selection committee saw character, perseverance and promise in your story. The way you care for others, the responsibilities you carry and the courage you show as you grow are worth recognizing.",
+  "I hope you’ll carry this encouragement with you as you keep learning, serving and pursuing the difference you hope to make."
+ ];
+ if(record.founderNote)paragraphs.push(record.founderNote);
+ const footer=["Official Beacon Scholar Recognition",record.publicId].filter(Boolean).join(" · ");
+ return studentLetter("Congratulations, Beacon Scholar",record.recognitionName||record.studentName,paragraphs,"With sincere congratulations,",footer);
+}
+function nominationLetter(record){
+ return studentLetter("You were nominated for Beacon Scholars",record.studentName,[
+  "Someone in your community thought of you when they had the chance to recognize a student whose character and potential deserve to be seen. They took the time to nominate you for Beacon Scholars.",
+  "Your nomination counts as your official entry. You don’t need to complete a separate application. The Beacon team may reach out about eligibility, references or parent or guardian permission as part of the review.",
+  "I hope it encourages you to know that someone noticed the way you show up for others and took the time to tell us about you."
+ ],"With encouragement,","Beacon Scholars · Class of "+record.cycle);
+}
+function committeeLetterActions(record){
+ if(!record.canManage)return null;
+ const actions=el("div",undefined,"review-actions");
+ const options=[];
+ if(record.status==="selected")options.push(["Print congratulations letter",congratulationsLetter]);
+ if(record.type==="nomination"||record.endorsementCount>0||record.endorsements?.length)
+  options.push(["Print nomination letter",nominationLetter]);
+ for(const [label,createLetter] of options){
+  const button=el("button",label,"btn btn-outline");button.type="button";
+  button.onclick=()=>printDocument(createLetter(record));
+  actions.append(button);
+ }
+ return actions.childElementCount?actions:null;
 }
 async function showScholar(){
  const root=$("scholar-content");root.textContent="Loading Scholar Passport…";
@@ -521,14 +570,14 @@ async function showScholar(){
   const verifyLink=el("a","Verify this Scholar ID →","text-link");verifyLink.href="#verify/"+encodeURIComponent(record.publicId);root.append(verifyLink);
   const toolbar=el("div",undefined,"portal-actions");
   const printLetter=el("button","Print official letter","btn btn-gold"),printCert=el("button","Print certificate","btn btn-outline");
-  printLetter.onclick=()=>showScholarDocument("official-letter");printCert.onclick=()=>showScholarDocument("official-certificate");
   toolbar.append(printLetter,printCert);root.append(toolbar);
   const name=escaped(record.recognitionName||record.studentName);
   const id=escaped(record.publicId);
-  const letter=el("section",undefined,"paper-document");letter.id="official-letter";
-  letter.innerHTML='<div class="paper-kicker">THE PRAYER PROJECT • BEACON SCHOLARS</div><div class="paper-divider"></div><h2>Official Letter of Recognition</h2><p>Dear '+name+',</p><p>It is my distinct pleasure to recognize you as a <strong>Beacon Scholar</strong>. You were selected because your character, perseverance, care for others and promise deserve to be seen.</p><p>Not every meaningful contribution receives an award. The way you treat people, the responsibility you carry, and the courage to grow matter deeply. You do not need to have every answer today. Continue to learn, serve, begin again when necessary, and pursue the difference you hope to make.</p><p>Your recognition is a reminder that your story has value and your future holds possibility. I hope you will carry that encouragement with you in the years ahead.</p>'+ (record.founderNote?'<p><strong>A personal note:</strong> '+escaped(record.founderNote)+'</p>':'')+'<p>With sincere congratulations,</p><div class="signature">Christopher Shelley</div><p><strong>Christopher Shelley</strong><br>Founder, The Prayer Project</p><div class="paper-divider"></div><small>Official Beacon Scholar Recognition · '+id+' · beacon.ask4prayers.com</small>';
+  const letter=congratulationsLetter(record);
   const certificate=el("section",undefined,"paper-document cert");certificate.id="official-certificate";
   certificate.innerHTML='<div class="paper-kicker">THE PRAYER PROJECT</div><div class="paper-seal">✦</div><h2>BEACON SCHOLARS</h2><h3>CERTIFICATE OF RECOGNITION</h3><p>Presented with distinction to</p><h2 class="recipient-name">'+name+'</h2><p>In recognition of exceptional character, promise, perseverance, and the potential to make a meaningful difference.</p><h3>Beacon Scholar • Class of '+escaped(record.cycle)+'</h3><div class="paper-divider"></div><div class="signature">Christopher Shelley</div><p>Founder, The Prayer Project</p><small>Recognition ID: '+id+' · beacon.ask4prayers.com</small>';
+  printLetter.onclick=()=>printDocument(letter);
+  printCert.onclick=()=>printDocument(certificate);
   root.append(letter,certificate);
  }catch(e){root.textContent=readable(e);}
 }
@@ -656,6 +705,8 @@ async function openReview(entryId){
   container.replaceChildren();
   const core=el("section",undefined,"review-card");
   core.append(el("h2",d.studentName+" — Grade "+d.grade));
+  const letters=committeeLetterActions(d);
+  if(letters)core.append(letters);
   core.append(infoRow("Application ID",d.entryId));
   core.append(infoRow("Entry pathway",d.type));
   core.append(infoRow("Current status",d.status));
