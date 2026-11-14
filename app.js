@@ -792,6 +792,7 @@ async function openReview(entryId){
   container.append(core);
   const refs=workspaceCard("References and consent");
   refs.id="review-references";
+  if(!d.references?.length)refs.append(el("p","No reference responses have been recorded yet.","muted"));
   const referenceLabels=["Academic reference","Character reference"];
   (d.referenceSuggestions||[]).forEach((r,i)=>{
    if(r.name||r.email)refs.append(infoRow(referenceLabels[i], [r.name,r.email].filter(Boolean).join(" • ")));
@@ -891,6 +892,7 @@ async function openReview(entryId){
   recuse.type="button";recuse.onclick=()=>action("recuse",{entryId,reason:conflict.value},entryId);
   recusal.append(el("summary","Conflict of interest"),conflictField,recuse);
   control.append(recusal);
+  container.append(control);
   if(d.canManage&&!["selected","not_selected","merged","withdrawn"].includes(d.status)){
    const adminTools=el("div",undefined,"workspace-columns");
    adminTools.id="review-admin-actions";
@@ -917,9 +919,7 @@ async function openReview(entryId){
    }
    decisionCard.append(founderField,decisions);
    adminTools.append(eligibility,decisionCard);
-   container.append(control,adminTools);
-  }else{
-   container.append(control);
+   container.append(adminTools);
   }
   const shortcuts=el("nav",undefined,"review-shortcuts");
   shortcuts.setAttribute("aria-label","Selection file sections");
