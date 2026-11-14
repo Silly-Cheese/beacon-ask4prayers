@@ -30,6 +30,9 @@ const str=(v,max=180)=>clean(v,max);
 const y=v=>{const n=Number(v);return Number.isInteger(n)&&n>=2026&&n<=2040?n:null;};
 const bool=v=>v===true;
 const dedupe=o=>hash([o.studentName,o.school,o.graduationYear].map(x=>String(x).toLowerCase().trim().replace(/\s+/g,"")).join("|"));
+const entryClosed=status=>["selected","not_selected","merged","withdrawn"].includes(status);
+const entryKeyHash=token=>hash("beacon-entry:"+token);
+const keyRef=token=>db.collection("nominationKeys").doc(entryKeyHash(token));
 function references(v,draft=false) {
  if(!Array.isArray(v))return [];
  const email=draft?v=>str(v,254).toLowerCase():mail;
@@ -207,7 +210,8 @@ exports.getMyEntry=onCall(opts,async r=>{
    guardianStatus:d.guardianStatus,referenceStatus:d.referenceStatus,
    selectedAt:d.selectedAt?.toDate?.()?.toISOString?.()||null,publicId:d.publicId||null,
    founderNote:d.founderNote||"",recognitionName:d.recognitionName||d.studentName,
-   deliveryPreference:d.deliveryPreference||"digital",address:d.address||null,opportunities:true
+   deliveryPreference:d.deliveryPreference||"digital",address:d.address||null,opportunities:true,
+   nominationFollowUp:d.type==="nomination"?await nominationFollowUp(doc):null
  }};
 });
 exports.listReviewQueue=onCall(opts,async r=>{
@@ -256,7 +260,11 @@ exports.getReviewEntry=onCall(opts,async r=>{
    reviewCount:votes.size,approveVotes:votes.docs.filter(x=>x.get("recommend")==="select").length,
    myReview:votes.docs.find(x=>x.id===r.auth.uid)?.data()||null,
    recusalCount:recusals.size,
-   founderNote:isAdmin(r)?d.founderNote||"":""
+   founderNote:isAdmin(r)?d.founderNote||"":"",
+   nominationLetter:isAdmin(r)?{
+    keyIssued:!!d.entryKeyHash,needsEntryKey:d.type==="nomination"&&!d.applicantUid&&!entryClosed(d.status),
+    followUpRequested:d.nominationFollowUp?.requestedAt?.toDate?.()?.toISOString?.()||null
+   }:null
  }};
 });
 exports.recuse=onCall(opts,async r=>{
@@ -363,8 +371,11 @@ exports.respondInvitation=onCall(opts,async r=>{
   if(answers.some(x=>x.length<15))err("Complete all five reference questions.");
   const target=entryRef.collection("references").doc(String(i.slot));
   await db.runTransaction(async tx=>{
-   const [fresh,entry]=await Promise.all([tx.get(ref),tx.get(entryRef)]);
-   if(fresh.get("status")!=="pending"||!entry.exists)throw new HttpsError("failed-precondition","Invitation unavailable.");
+   const [fresh,entry,prior]=await Promise.all([tx.get(ref),tx.get(entryRef),tx.get(target)]);
+   if(fresh.get("status")!=="pending"||fresh.get("expiresAt").toMillis()<Date.now()||
+      !entry.exists||entryClosed(entry.get("status"))||prior.get("verified")===true||
+      entry.get("references")?.[i.slot]?.email!==i.recipientEmail)
+    throw new HttpsError("failed-precondition","This reference link is no longer active.");
    tx.set(target,{fullName,signature,answers,recipientEmail:i.recipientEmail,slot:i.slot,submittedAt:stamp(),verified:false});
    tx.update(ref,{status:"completed",usedAt:stamp()});
    tx.update(entryRef,{referenceStatus:"awaiting_verification",lastUpdatedAt:stamp()});
@@ -374,7 +385,10 @@ exports.respondInvitation=onCall(opts,async r=>{
   if(!bool(response.consent)||!bool(response.isGuardian))err("Consent and guardian authority are both required.");
   await db.runTransaction(async tx=>{
    const [fresh,entry]=await Promise.all([tx.get(ref),tx.get(entryRef)]);
-   if(fresh.get("status")!=="pending"||!entry.exists)throw new HttpsError("failed-precondition","Invitation unavailable.");
+   if(fresh.get("status")!=="pending"||fresh.get("expiresAt").toMillis()<Date.now()||
+      !entry.exists||entryClosed(entry.get("status"))||entry.get("guardianStatus")==="verified"||
+      entry.get("ageBand")==="adult"||entry.get("guardianEmail")!==i.recipientEmail)
+    throw new HttpsError("failed-precondition","This guardian link is no longer active.");
    tx.update(entryRef,{guardianStatus:"signed_pending_verification",guardianRecord:{
      fullName,signature,relationship:str(response.relationship,100),
      consent:true,publicityConsent:bool(response.publicityConsent),
@@ -418,6 +432,8 @@ exports.finalizeDecision=onCall(opts,async r=>{
  if(!snap.exists)throw new HttpsError("not-found","Entry not found.");
  const d=snap.data();
  if(["selected","not_selected","merged","withdrawn"].includes(d.status))throw new HttpsError("failed-precondition","Entry cannot be finalized.");
+ if(decision==="select"&&d.entryKeyHash&&!d.nominationFollowUp?.requestedAt)
+  throw new HttpsError("failed-precondition","The nominee must connect their Entry Key and submit their follow-up details first.");
  if(!d.verifiedEligibility)throw new HttpsError("failed-precondition","Eligibility must be verified first.");
  const votes=await entry.collection("reviews").get();
  if(votes.size<3||votes.size>5)throw new HttpsError("failed-precondition","Require 3–5 independent committee reviews.");
@@ -517,9 +533,111 @@ exports.useVerifiedNominatorReference=onCall(opts,async r=>{
  await audit("nominator_as_reference",entryId,r.auth.uid,{slot});
  return {ok:true};
 });
+exports.createNominationKey=onCall(opts,async r=>{
+ owner(r);
+ const entryId=str(r.data?.entryId,140);
+ if(!entryId||entryId.includes("/"))err("Choose a nomination.");
+ const entry=db.collection("entries").doc(entryId);
+ const token=crypto.randomBytes(16).toString("hex").toUpperCase();
+ const key=keyRef(token),expires=Date.now()+30*86400000;
+ await db.runTransaction(async tx=>{
+  const snapshot=await tx.get(entry);
+  if(!snapshot.exists||snapshot.get("type")!=="nomination"||entryClosed(snapshot.get("status"))||snapshot.get("applicantUid"))
+   throw new HttpsError("failed-precondition","This nomination is no longer waiting to be connected.");
+  const oldKey=snapshot.get("entryKeyHash");
+  if(oldKey&&r.data?.replace!==true&&snapshot.get("entryKeyExpiresAt")?.toMillis()>Date.now())
+   throw new HttpsError("failed-precondition","An Entry Key already exists. Reopen this selection file before issuing a replacement.");
+  const expiresAt=admin.firestore.Timestamp.fromMillis(expires);
+  tx.create(key,{entryId,expiresAt});
+  tx.update(entry,{entryKeyHash:key.id,entryKeyExpiresAt:expiresAt,lastUpdatedAt:stamp()});
+  if(oldKey)tx.delete(db.collection("nominationKeys").doc(oldKey));
+  tx.create(db.collection("auditLogs").doc(),{action:"nomination_key_issued",entryId,actorUid:r.auth.uid,at:stamp()});
+ });
+ return {key:token.match(/.{4}/g).join("-"),expiresAt:new Date(expires).toISOString()};
+});
+async function claimEntryKey(r){
+ const token=str(r.data?.entryKey,80).replace(/[\s-]/g,"").toUpperCase();
+ if(!/^[0-9A-F]{32}$/.test(token))err("Enter the complete Entry Key from your letter.");
+ const key=keyRef(token),email=mail(r.auth.token.email);
+ if(!email)throw new HttpsError("failed-precondition","Use a verified email account.");
+ return db.runTransaction(async tx=>{
+  const ticket=await tx.get(key);
+  const invalid=()=>new HttpsError("not-found","This Entry Key is invalid, expired, or already used.");
+  if(!ticket.exists||ticket.get("expiresAt").toMillis()<Date.now())throw invalid();
+  const entry=db.collection("entries").doc(ticket.get("entryId"));
+  const record=await tx.get(entry);
+  if(!record.exists||record.get("type")!=="nomination"||entryClosed(record.get("status"))||record.get("entryKeyHash")!==key.id)throw invalid();
+  if(ticket.get("usedBy")===r.auth.uid&&record.get("applicantUid")===r.auth.uid)return {ok:true,entryId:entry.id};
+  if(ticket.get("usedBy")||record.get("applicantUid"))throw invalid();
+  const studentEmail=mail(record.get("applicantEmail"));
+  if(studentEmail&&studentEmail!==email)throw new HttpsError("permission-denied","Sign in with the student email Beacon has on file, or contact Beacon to correct it.");
+  tx.update(entry,{applicantUid:r.auth.uid,applicantEmail:email,lastUpdatedAt:stamp()});
+  tx.update(key,{usedBy:r.auth.uid,usedAt:stamp()});
+  tx.create(db.collection("auditLogs").doc(),{action:"nomination_key_claimed",entryId:entry.id,actorUid:r.auth.uid,at:stamp()});
+  return {ok:true,entryId:entry.id};
+ });
+}
+async function nominationFollowUp(snapshot){
+ const submitted=snapshot.get("nominationFollowUp");
+ const responses=await snapshot.ref.collection("references").get();
+ return {
+  canSubmit:!entryClosed(snapshot.get("status"))&&!submitted?.requestedAt,
+  requested:!!submitted?.requestedAt,
+  ageBand:snapshot.get("ageBand")||"",
+  guardianLocked:!!snapshot.get("guardianRecord")?.consent&&snapshot.get("guardianStatus")!=="withdrawn",
+  references:[0,1].map(slot=>{
+   const reference=responses.docs.find(doc=>doc.id===String(slot));
+   return reference?(reference.get("verified")===true?"Verified":"Response received"):"Pending";
+  })
+ };
+}
+exports.submitNominationFollowUp=onCall(opts,async r=>{
+ requireAuth(r);
+ if(r.auth.token.email_verified!==true)throw new HttpsError("failed-precondition","Verify your account email first.");
+ const entryId=str(r.data?.entryId,140);
+ if(!entryId||entryId.includes("/"))err("Choose your nomination.");
+ const entry=db.collection("entries").doc(entryId), fields=r.data?.fields||{};
+ return db.runTransaction(async tx=>{
+  const snapshot=await tx.get(entry);
+  if(!snapshot.exists||snapshot.get("type")!=="nomination"||snapshot.get("applicantUid")!==r.auth.uid)
+   throw new HttpsError("permission-denied","This nomination is not connected to your account.");
+  if(snapshot.get("nominationFollowUp")?.requestedAt)return {ok:true};
+  if(entryClosed(snapshot.get("status")))throw new HttpsError("failed-precondition","This nomination is no longer under consideration.");
+  const responses=await Promise.all([0,1].map(slot=>tx.get(entry.collection("references").doc(String(slot)))));
+  const contacts=references(fields.references);
+  const savedReferences=snapshot.get("references")||[];
+  const nextReferences=responses.map((response,slot)=>{
+   if(response.exists)return savedReferences[slot]||{name:"",email:"",relationship:""};
+   const reference=contacts[slot];
+   if(!reference?.name||!reference.email)err("Provide a name and email for each outstanding reference.");
+   return reference;
+  });
+  const referenceEmails=responses.map((response,slot)=>mail(response.get("recipientEmail")||nextReferences[slot].email)).filter(Boolean);
+  const guardianLocked=!!snapshot.get("guardianRecord")?.consent&&snapshot.get("guardianStatus")!=="withdrawn";
+  const ageBand=guardianLocked?"minor":fields.ageBand;
+  if(!["minor","adult"].includes(ageBand))err("Choose whether you are under 18.");
+  const guardianName=ageBand==="minor"?str(guardianLocked?snapshot.get("guardianName"):fields.guardianName,120):"";
+  const guardianEmail=ageBand==="minor"?mail(guardianLocked?snapshot.get("guardianEmail"):fields.guardianEmail):"";
+  if(ageBand==="minor"&&!guardianLocked&&(!guardianName||!guardianEmail))err("Provide your parent or guardian’s name and email.");
+  const studentEmail=mail(r.auth.token.email);
+  if(guardianEmail&&guardianEmail===studentEmail)err("Use a separate email for your parent or guardian.");
+  if(new Set(referenceEmails).size!==referenceEmails.length||referenceEmails.some(email=>email===studentEmail||email===guardianEmail))
+   err("Use a different email for each reference, the student, and the parent or guardian.");
+  const guardianStatus=ageBand==="adult"?"not_required":guardianLocked?snapshot.get("guardianStatus"):"pending";
+  const referenceCount=responses.filter(response=>response.get("verified")===true).length;
+  const referenceStatus=referenceCount===2?"verified":responses.some(response=>response.exists&&response.get("verified")!==true)?"awaiting_verification":"pending";
+  tx.update(entry,{references:nextReferences,ageBand,guardianName,guardianEmail,guardianStatus,referenceCount,referenceStatus,
+   ...(guardianLocked?{}:{guardianRecord:admin.firestore.FieldValue.delete()}),
+   nominationFollowUp:{requestedAt:stamp()},lastUpdatedAt:stamp()});
+  tx.create(db.collection("auditLogs").doc(),{action:"nomination_follow_up_requested",entryId,actorUid:r.auth.uid,at:stamp()});
+  return {ok:true};
+ });
+});
+
 exports.claimNomination=onCall(opts,async r=>{
  requireAuth(r);
  if(!r.auth.token.email_verified)throw new HttpsError("failed-precondition","Verify your account email first.");
+ if(r.data?.entryKey!==undefined)return claimEntryKey(r);
  const token=str(r.data?.token,150),invite=db.collection("invitations").doc(hash(token)),s=await invite.get();
  if(!s.exists||s.get("kind")!=="scholar"||s.get("status")!=="pending"||s.get("expiresAt").toMillis()<Date.now())
   throw new HttpsError("not-found","Claim invitation invalid or expired.");
@@ -528,7 +646,7 @@ exports.claimNomination=onCall(opts,async r=>{
  const entry=db.collection("entries").doc(s.get("entryId"));
  await db.runTransaction(async tx=>{
   const [fresh,e]=await Promise.all([tx.get(invite),tx.get(entry)]);
-  if(fresh.get("status")!=="pending"||!e.exists)throw new HttpsError("failed-precondition","Claim unavailable.");
+  if(fresh.get("status")!=="pending"||!e.exists||["merged","withdrawn"].includes(e.get("status")))throw new HttpsError("failed-precondition","Claim unavailable.");
   if(e.get("applicantUid")&&e.get("applicantUid")!==r.auth.uid)throw new HttpsError("already-exists","Record belongs to another account.");
   tx.update(entry,{applicantUid:r.auth.uid,applicantEmail:r.auth.token.email.toLowerCase(),lastUpdatedAt:stamp()});
   tx.update(invite,{status:"completed",usedAt:stamp()});

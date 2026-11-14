@@ -30,3 +30,9 @@ Intake starts closed on a fresh deployment. If a prior deployment set `BEACON_IN
 Reviewers create a Beacon account using the email address that the administrator will authorize. Use the Firebase Admin SDK credentials and role commands described in [IMPLEMENTATION.md](IMPLEMENTATION.md). After the role is granted, the reviewer signs out and back in, then goes to [Committee](https://beacon.ask4prayers.com/#committee) and selects **Open Selection File**.
 
 After opening entries, submit a fictional application and nomination and confirm each receipt appears in the Committee queue. Administrators can issue guardian and reference invitations there. Links can be delivered manually or queued by a configured Firebase Trigger Email extension.
+
+## Nomination letters and student follow-up
+
+Open a nomination in Committee and click **Print nomination letter**. An unlinked, active nomination gets a private, 30-day Entry Key. If the letter is reissued from a newly opened selection file, the previous key is replaced after confirmation. Give the letter privately to the student.
+
+The student signs in with a verified account, enters the key at [Continue your nomination](https://beacon.ask4prayers.com/#claim), and submits the follow-up from **My dashboard**. They supply outstanding academic and character references and request guardian consent if they are under 18. The submitted request appears in the Committee selection file, where an admin uses **References and consent** to issue the private forms. Email delivery uses the existing Trigger Email setting. With email delivery off, the admin can copy each private link for delivery.

@@ -34,15 +34,17 @@ function whenOpen(){
  if(intakeState!=="open")throw Error("Intake is currently unavailable. Check the program status before trying again.");
 }
 function accountNeeded(){return !!currentUser&&!currentUser.isAnonymous;}
-function route(){
+function route(dashboardEntryId){
  const [key,...parts]=(location.hash.slice(1)||"home").split("/");
  const page=Object.hasOwn(PAGE,key)?key:"home";
  if(page==="account"){
   const target=parts.join("/");
-  accountReturn=/^(apply|nominate|dashboard)$|^claim\/[A-Za-z0-9_-]{43}$/.test(target)?target:"dashboard";
+  accountReturn=/^(apply|nominate|dashboard|committee|claim)$|^claim\/[A-Za-z0-9_-]{43}$/.test(target)?target:"dashboard";
   const link=$("account-continue");
   link.href="#"+accountReturn;
-  link.textContent=accountReturn==="apply"?"Continue to your application →":accountReturn==="nominate"?"Return to your nomination →":accountReturn.startsWith("claim/")?"Return to your invitation →":accountReturn==="committee"?"Open Committee →":"Open dashboard →";
+  const destinations={apply:"Continue to your application →",nominate:"Return to your nomination →",
+   claim:"Continue your nomination →",committee:"Open Committee →",dashboard:"Open dashboard →"};
+  link.textContent=destinations[accountReturn]||destinations.claim;
  }
  inviteToken=(page==="reference"||page==="consent"||page==="claim")?parts.join("/"):null;
  Object.values(PAGE).forEach(id=>{const node=$(id);if(node)node.hidden=true;});
@@ -53,12 +55,12 @@ function route(){
  if(["mission","selection","opportunities","faq"].includes(page))requestAnimationFrame(()=>$(page).scrollIntoView({behavior:"smooth",block:"start"}));
  else window.scrollTo({top:0,behavior:"instant"});
  if(page==="apply")prepareApplication();
- if(page==="dashboard")showDashboard();
+ if(page==="dashboard")showDashboard(typeof dashboardEntryId==="string"?dashboardEntryId:null);
  if(page==="committee")showCommittee();
  if(page==="scholar")showScholar();
  if(page==="reference"||page==="consent")loadInvitation(page);
  if(page==="claim"){
-  $("claim-account-link").href="#account/claim/"+encodeURIComponent(inviteToken||"");
+  $("claim-account-link").href=inviteToken?"#account/claim/"+encodeURIComponent(inviteToken):"#account/claim";
   loadClaim();
  }
  if(page==="verify"&&parts.length){const input=qs('input[name="publicId"]',$("verify-form"));input.value=parts[0];checkScholarId(parts[0]);}
@@ -116,6 +118,7 @@ onAuthStateChanged(auth,async u=>{
  refreshGates();
  if(location.hash==="#apply")await prepareApplication();
  if(location.hash==="#dashboard")showDashboard();
+ if(location.hash==="#claim"||location.hash.startsWith("#claim/"))loadClaim();
  if(location.hash==="#committee")showCommittee();
  if(location.hash==="#scholar")showScholar();
 });
@@ -466,17 +469,20 @@ function workspaceFacts(facts){
  }
  return list;
 }
-async function showDashboard(){
+async function showDashboard(openEntryId=null){
  const root=$("dashboard-content");root.replaceChildren();
  if(!accountNeeded()){
   const gate=workspaceCard("Sign in to continue","Your drafts and submitted entries are linked to your Beacon account.");
-  gate.append(workspaceLink("Sign in or create an account","#account/dashboard","btn-gold"));root.append(gate);return;
+  gate.append(workspaceLink("Sign in or create an account","#account/dashboard","btn-gold"),
+   workspaceLink("Continue a nomination","#claim"));root.append(gate);return;
  }
  root.textContent="Loading your Beacon record…";
  try{
   const [draft,submitted]=await Promise.all([call("getDraft"),call("getMyEntries")]);
   const entries=submitted.entries||[];
   root.replaceChildren();
+  const claimCard=workspaceCard("Received a nomination letter?","Use the Entry Key in your letter to connect the nomination to this account.");
+  claimCard.append(workspaceLink("Enter Entry Key","#claim"));root.append(claimCard);
   const currentEntry=entries.find(entry=>entry.cycle===settings.cycle);
   if(!currentEntry){
    const start=workspaceCard(draft.draft?"Saved application":"Apply for recognition",
@@ -489,12 +495,16 @@ async function showDashboard(){
   const list=workspaceCard("Submitted entries");
   if(!entries.length)list.append(el("p","You haven’t submitted an entry yet.","muted"));
   for(const entry of entries){
-   list.append(entryRow(entry,"View details",async()=>{
+   list.append(entryRow(entry,entry.type==="nomination"?"View nomination":"View details",async()=>{
     try{const {entry:record}=await call("getMyEntry",{entryId:entry.entryId});showEntryDetails(root,record);}
     catch(error){notify(readable(error));}
    }));
   }
   root.append(list);
+  if(openEntryId&&entries.some(entry=>entry.entryId===openEntryId)){
+   const {entry}=await call("getMyEntry",{entryId:openEntryId});
+   if(location.hash==="#dashboard")showEntryDetails(root,entry);
+  }
  }catch(e){root.textContent=readable(e);}
 }
 function showEntryDetails(root,entry){
@@ -505,7 +515,73 @@ function showEntryDetails(root,entry){
   ["Guardian permission",statusText(entry.guardianStatus)],["Entry ID",entry.entryId]
  ]));
  if(entry.status==="selected")panel.append(workspaceLink("Open Scholar Passport","#scholar","btn-gold"));
+ if(entry.nominationFollowUp)panel.append(nominationFollowUpPanel(entry,root));
  root.append(panel);panel.scrollIntoView({behavior:"smooth",block:"nearest"});
+}
+
+function nominationFollowUpPanel(entry,root){
+ const followUp=entry.nominationFollowUp;
+ const panel=el("section",undefined,"workspace-subsection");
+ panel.append(el("h3","Nomination follow-up"),workspaceFacts([
+  ["Academic reference",followUp.references[0]],["Character reference",followUp.references[1]]
+ ]));
+ if(followUp.requested){
+  panel.append(el("p","Beacon received your details. The team will follow up with your references and, if required, send your parent or guardian a private consent form. You can check progress here.","muted"));
+  return panel;
+ }
+ if(!followUp.canSubmit)return panel;
+ const form=el("form",undefined,"entry-form");
+ panel.append(el("p","Choose one person who knows your schoolwork and another who can speak to your character. Ask them before sharing their contact information.","muted"),form);
+ const contacts=el("div",undefined,"field-grid");
+ const addField=(parent,label,name,type="text")=>{
+  const field=el("label",label),input=el("input");
+  input.name=name;input.type=type;input.required=true;input.maxLength=type==="email"?254:120;
+  field.append(input);parent.append(field);
+ };
+ ["Academic","Character"].forEach((label,slot)=>{
+  if(followUp.references[slot]!=="Pending")return;
+  addField(contacts,label+" reference name","ref"+slot+"Name");
+  addField(contacts,label+" reference email","ref"+slot+"Email","email");
+ });
+ form.append(contacts);
+ const ageLabel=el("label","Are you under 18?"),age=el("select");
+ age.name="ageBand";age.required=true;
+ for(const [value,label] of [["","Choose one"],["minor","Yes, I’m under 18"],["adult","No, I’m 18 or older"]]){
+  const option=el("option",label);option.value=value;age.append(option);
+ }
+ age.value=followUp.guardianLocked?"minor":followUp.ageBand;
+ age.disabled=followUp.guardianLocked;ageLabel.append(age);form.append(ageLabel);
+ const guardian=el("fieldset",undefined,"follow-up-guardian");
+ guardian.append(el("legend","Request parent or guardian consent"),
+  el("p","Beacon will send your parent or guardian a separate form. They provide the consent themselves.","help"));
+ const guardianFields=el("div",undefined,"field-grid");
+ addField(guardianFields,"Parent or guardian name","guardianName");
+ addField(guardianFields,"Parent or guardian email","guardianEmail","email");
+ guardian.append(guardianFields);form.append(guardian);
+ const showGuardian=()=>{
+  guardian.hidden=age.value!=="minor"||followUp.guardianLocked;
+  guardian.disabled=guardian.hidden;
+ };
+ age.addEventListener("change",showGuardian);showGuardian();
+ const error=el("p",undefined,"intake-error");error.setAttribute("role","alert");error.hidden=true;
+ const submit=el("button","Submit follow-up and request forms","btn btn-gold");
+ submit.type="submit";form.append(error,submit);
+ form.addEventListener("submit",async event=>{
+  event.preventDefault();
+  const data=new FormData(form),fields={
+   ageBand:age.value,guardianName:data.get("guardianName"),guardianEmail:data.get("guardianEmail"),
+   references:[0,1].map(slot=>({name:data.get("ref"+slot+"Name"),email:data.get("ref"+slot+"Email")}))
+  };
+  submit.disabled=true;error.hidden=true;
+  try{
+   await call("submitNominationFollowUp",{entryId:entry.entryId,fields});
+   notify("Your follow-up is on file. Beacon will arrange the requested forms.");
+   const {entry:updated}=await call("getMyEntry",{entryId:entry.entryId});
+   showEntryDetails(root,updated);
+  }catch(err){error.textContent=readable(err);error.hidden=false;}
+  finally{submit.disabled=false;}
+ });
+ return panel;
 }
 
 function infoRow(label,value){const p=el("p");const b=el("strong",label+": ");p.append(b,document.createTextNode(String(value||"—")));return p;}
@@ -525,7 +601,7 @@ function studentLetter(title,name,paragraphs,closing,footer){
   el("h2",title),
   el("p","Dear "+name+","),
   ...paragraphs.map(paragraph=>el("p",paragraph)),
-  el("p",closing),
+  el("p",closing,"letter-closing"),
   el("div","Christopher Shelley","signature"),
   el("p","Founder, The Prayer Project"),
   el("div",undefined,"paper-divider"),
@@ -543,23 +619,64 @@ function congratulationsLetter(record){
  const footer=["Official Beacon Scholar Recognition",record.publicId].filter(Boolean).join(" · ");
  return studentLetter("Congratulations, Beacon Scholar",record.recognitionName||record.studentName,paragraphs,"With sincere congratulations,",footer);
 }
-function nominationLetter(record){
- return studentLetter("You were nominated for Beacon Scholars",record.studentName,[
-  "Someone in your community thought of you when they had the chance to recognize a student whose character and potential deserve to be seen. They took the time to nominate you for Beacon Scholars.",
-  "Your nomination counts as your official entry. You don’t need to complete a separate application. The Beacon team may reach out about eligibility, references or parent or guardian permission as part of the review.",
-  "I hope it encourages you to know that someone noticed the way you show up for others and took the time to tell us about you."
- ],"With encouragement,","Beacon Scholars · Class of "+record.cycle);
+function nominationLetter(record,entryKey,includeFollowUp){
+ const paragraphs=[
+  "Congratulations on being nominated for Beacon Scholars. Someone had the opportunity to put a student forward for this recognition, and they thought of you. They took the time to tell us that your character and the difference you make in your community are worth recognizing.",
+  "I hope you take a moment to be proud of that. So much of what matters happens in ordinary moments: keeping your word, showing kindness, taking responsibility, or continuing when things get hard. To have someone see promise in you and put your name forward is an honor in its own right.",
+ ];
+ if(includeFollowUp)paragraphs.push("Your nomination is already your official entry. If you would like to continue, follow the steps below. Beacon will use your follow-up to request the required forms and confirm eligibility.");
+ const closing="With warm congratulations,";
+ const sheet=studentLetter("Congratulations on your Beacon nomination",record.studentName,paragraphs,closing,"Beacon Scholars · Class of "+record.cycle);
+ if(!includeFollowUp)return sheet;
+ const next=el("section",undefined,"nomination-letter-steps");
+ next.append(el("h3","Continue your nomination"));
+ const steps=el("ol");
+ const instructions=[
+  entryKey?"Visit beacon.ask4prayers.com/#claim. Sign in or create a student account and verify your email.":"Sign in to Beacon and open My Dashboard.",
+  entryKey?"Enter the private Entry Key below.":"Open the nomination already linked to your account.",
+  "In My Dashboard, open your nomination and add one academic reference and one character reference. Skip any reference already received.",
+  "If you’re under 18, enter your parent or guardian’s name and email to request a consent form.",
+  "Submit your follow-up and check My Dashboard for updates."
+ ];
+ instructions.forEach(instruction=>steps.append(el("li",instruction)));
+ next.append(steps);
+ if(entryKey){
+  const expires=new Date(entryKey.expiresAt).toLocaleDateString("en-US",{dateStyle:"long",timeZone:"America/Chicago"});
+  const key=el("div",undefined,"nomination-entry-key");
+  key.append(el("strong","Your private Entry Key"),el("code",entryKey.key),el("small","Use by "+expires+". Keep this key private."));
+  next.append(key);
+ }
+ next.append(el("p","The committee reviews eligibility and completed references and, for students under 18, verified guardian consent before making its decision."));
+ qs(".letter-closing",sheet).before(next);
+ return sheet;
 }
 function committeeLetterActions(record){
  if(!record.canManage)return null;
  const actions=el("div",undefined,"review-actions");
- const options=[];
- if(record.status==="selected")options.push(["Print congratulations letter",congratulationsLetter]);
- if(record.type==="nomination"||record.endorsementCount>0||record.endorsements?.length)
-  options.push(["Print nomination letter",nominationLetter]);
- for(const [label,createLetter] of options){
-  const button=el("button",label,"btn btn-outline");button.type="button";
-  button.onclick=()=>printDocument(createLetter(record));
+ if(record.status==="selected"){
+  const button=el("button","Print congratulations letter","btn btn-outline");button.type="button";
+  button.onclick=()=>printDocument(congratulationsLetter(record));
+  actions.append(button);
+ }
+ const active=!["selected","not_selected","merged","withdrawn"].includes(record.status);
+ if(record.type==="nomination"||record.endorsementCount>0||record.endorsements?.length){
+  const button=el("button","Print nomination letter","btn btn-outline");button.type="button";
+  let entryKey=null;
+  button.onclick=async()=>{
+   button.disabled=true;
+   try{
+    if(active&&record.nominationLetter?.needsEntryKey&&(!entryKey||Date.parse(entryKey.expiresAt)<=Date.now())){
+     const replace=record.nominationLetter.keyIssued&&!entryKey;
+     if(replace&&!confirm("Create a new Entry Key? The key on the previous letter will stop working."))return;
+     entryKey=await call("createNominationKey",{entryId:record.entryId,replace:!!replace});
+    }
+    if(active&&record.type==="nomination"&&!record.nominationLetter)
+     throw Error("Deploy the updated Firebase Functions before printing a nomination letter with an Entry Key.");
+    const needsFollowUp=active&&record.type==="nomination"&&record.nominationLetter&&!record.nominationLetter.followUpRequested;
+    printDocument(nominationLetter(record,entryKey,needsFollowUp));
+   }catch(error){notify(readable(error));}
+   finally{button.disabled=false;}
+  };
   actions.append(button);
  }
  return actions.childElementCount?actions:null;
@@ -639,23 +756,40 @@ $("reference-questions").replaceChildren(...prompts.map((q,i)=>{
  const l=el("label",q);const t=el("textarea");t.name="answer"+i;t.rows=4;t.required=true;t.minLength=15;t.maxLength=1600;l.append(t);return l;
 }));
 async function loadClaim(){
- const info=$("claim-info");
- if(!inviteToken){info.textContent="No invitation token was provided.";return;}
+ const info=$("claim-info"),form=$("claim-form"),token=inviteToken;
+ const signed=accountNeeded(),keyInput=form.elements.entryKey;
+ $("claim-error").hidden=true;
+ $("claim-account-link").hidden=signed;
+ form.hidden=!signed;
+ $("entry-key-field").hidden=!!token;
+ keyInput.required=!token;
+ info.textContent=signed?"Enter the Entry Key printed on your nomination letter.":"Sign in or create an account, then return here to enter your private Entry Key.";
+ if(!token)return;
  try{
-  const result=await call("getInvitation",{token:inviteToken});
-  if(result.kind!=="scholar")throw Error("This invitation is not for a Scholar account.");
-  info.textContent="You've been invited to connect the nomination for "+result.recipientName+". Sign in with your verified invited email address to continue.";
- }catch(err){info.textContent=readable(err);}
+  const result=await call("getInvitation",{token});
+  if(inviteToken!==token||!location.hash.startsWith("#claim/"))return;
+  if(result.kind!=="scholar")throw Error("This invitation is not for a student account.");
+  info.textContent="Beacon invited "+result.recipientName+" to connect a record. Use the verified email address that received the invitation.";
+ }catch(err){
+  if(inviteToken===token&&location.hash.startsWith("#claim/")){info.textContent=readable(err);form.hidden=true;}
+ }
 }
-$("claim-now").addEventListener("click",async()=>{
- if(!accountNeeded()){location.hash="#account/claim/"+encodeURIComponent(inviteToken||"");return;}
+$("claim-form").addEventListener("submit",async event=>{
+ event.preventDefault();
+ if(!accountNeeded())return;
+ const form=event.currentTarget,button=$("claim-now"),error=$("claim-error");
+ if(button.disabled)return;
+ const payload=inviteToken?{token:inviteToken}:{entryKey:form.elements.entryKey.value};
+ button.disabled=true;error.hidden=true;
  try{
   await verifiedEmail();
-  const result=await call("claimNomination",{token:inviteToken});
+  const result=await call("claimNomination",payload);
+  form.reset();
   history.replaceState(null,"",location.pathname+"#dashboard");
-  notify("Your nomination is now connected to your Beacon account. No separate application is required.");
-  route();
- }catch(e){notify(readable(e));}
+  notify("Nomination connected. Add your references and request guardian consent if you’re under 18.");
+  route(result.entryId);
+ }catch(e){error.textContent=readable(e);error.hidden=false;}
+ finally{button.disabled=false;}
 });
 async function loadInvitation(kind){
  const intro=$(kind+"-intro"),form=$(kind+"-form");
@@ -779,6 +913,8 @@ async function openReview(entryId){
   for(const [key,label] of [["personalStatement","Essay or nomination"],["academicInterests","Academic interests"],["futureGoals","Future goals"],["service","Community service"],["activities","Leadership and activities"],["responsibilities","Responsibilities and personal growth"],["additionalInfo","Additional context"]]){
    if(d[key])story.append(el("h3",label),el("p",d[key]));
   }
+  if(d.canManage&&d.nominationLetter?.followUpRequested)
+   core.append(el("p","Student follow-up received. Use References and consent to issue any outstanding forms.","callout"));
   if(story.childElementCount)core.append(story);
   if(d.duplicateCount>1){core.append(el("p","Potential duplicate entries: "+d.duplicateCount+" records share the same student name, school and graduation year. Review without assuming they are duplicates.","callout"));}
   if((d.endorsements||[]).length){

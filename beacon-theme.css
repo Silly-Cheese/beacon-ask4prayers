@@ -320,3 +320,25 @@ input::placeholder,textarea::placeholder{color:#938577}
 }
 .review-shortcuts .link-button { font-size: .83rem; }
 #review-detail > * { scroll-margin-top: 6.5rem; }
+
+#entry-key-field input,
+.nomination-entry-key code { font-family: ui-monospace, monospace; letter-spacing: .04em; }
+.follow-up-guardian { min-width: 0; border: 1px solid var(--workspace-line); border-radius: 9px; padding: 1rem; }
+.follow-up-guardian legend { padding: 0 .35rem; font-weight: 650; }
+.nomination-letter-steps { margin: 1rem 0; }
+.nomination-letter-steps h3 { margin: 0 0 .45rem; font-size: 1.25rem; }
+.nomination-letter-steps ol { margin: 0 0 .65rem; padding-left: 1.35rem; }
+.nomination-letter-steps li + li { margin-top: .2rem; }
+.nomination-entry-key {
+  display: grid;
+  gap: .2rem;
+  border: 1px solid #b49a77;
+  padding: .55rem .75rem;
+  margin: .65rem 0;
+}
+.nomination-entry-key code { overflow-wrap: anywhere; }
+@media print {
+  #print-document .nomination-letter-steps { font-size: 10.5pt; line-height: 1.35; }
+  #print-document .nomination-letter-steps p { font-size: 10.5pt; line-height: 1.35; margin: .12in 0; }
+  #print-document .nomination-entry-key { break-inside: avoid; }
+}
