@@ -19,7 +19,9 @@ jobs:
       - name: Validate client JavaScript
         run: node --check app.js && node --check beacon-firebase.js
       - name: Validate Cloud Functions and role utility
-        run: node --check functions/index.js && node --check functions/grant-role.cjs
+        run: node --check functions/index.js && node --check functions/beacon-mail.js && node --check functions/grant-role.cjs
+      - name: Validate Google Apps Script sender
+        run: node --check < apps-script/Code.gs
       - name: Confirm required deployment files
         run: |
           test -f CNAME

@@ -35,4 +35,38 @@ After opening entries, submit a fictional application and nomination and confirm
 
 Open a nomination in Committee and click **Print nomination letter**. An unlinked, active nomination gets a private, 30-day Entry Key. If the letter is reissued from a newly opened selection file, the previous key is replaced after confirmation. Give the letter privately to the student.
 
-The student signs in with a verified account, enters the key at [Continue your nomination](https://beacon.ask4prayers.com/#claim), and submits the follow-up from **My dashboard**. They supply outstanding academic and character references and request guardian consent if they are under 18. The submitted request appears in the Committee selection file, where an admin uses **References and consent** to issue the private forms. Email delivery uses the existing Trigger Email setting. With email delivery off, the admin can copy each private link for delivery.
+The student signs in with a verified account, enters the key at [Continue your nomination](https://beacon.ask4prayers.com/#claim), and submits the follow-up from **My dashboard**. They supply outstanding academic and character references and request guardian consent if they are under 18. The submitted request appears in the Committee selection file. With Apps Script configured, outstanding forms are emailed automatically. Admins can also issue or replace private forms from **References and consent**.
+
+## Branded email and automatic form requests
+
+Beacon uses Firebase to generate verification links and Google Apps Script to send the branded emails. Once configured, Beacon also emails private forms to outstanding references and to the parent or guardian when the student is under 18. This happens when a student submits a new application or submits follow-up after claiming a nomination. Nominator submissions alone do not send emails.
+
+### Set up the sender once
+
+1. Sign into the Google account that should send Beacon email. Create a project at [Google Apps Script](https://script.google.com/home) and paste the contents of [apps-script/Code.gs](apps-script/Code.gs) into its `Code.gs` editor.
+2. Generate a private secret from the Beacon repo in PowerShell:
+
+   ```powershell
+   node.exe -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"
+   ```
+
+   In Apps Script, open **Project Settings → Script properties** and add `BEACON_MAIL_SECRET` with that value. Save the identical value to Firebase Secret Manager using the command below. Enter it when the CLI prompts. Keep it out of Git and the browser code.
+
+   ```powershell
+   npx.cmd --yes --package=firebase-tools@latest -- firebase.cmd functions:secrets:set BEACON_MAIL_SECRET --project beacon-ask4prayers
+   ```
+
+3. In Apps Script choose **Deploy → New deployment → Web app**. Set **Execute as** to **Me** and **Who has access** to **Anyone**. Authorize Google’s mail permission when prompted. Firebase signs each request with your secret. The web app accepts only signed, recent requests. Copy the deployment URL ending in `/exec`. If you update the script later, edit the existing deployment and select **New version** to keep its URL.
+4. Set `BEACON_APPS_SCRIPT_URL` in `functions/.env.beacon-ask4prayers` to that URL. Use **Authentication → Settings → Authorized domains** to confirm that `beacon.ask4prayers.com` is listed for the verification return link. Then run:
+
+   ```powershell
+   powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\deploy-beacon.ps1
+   ```
+
+### Test delivery
+
+Create a test account with an inbox you control, verify the email, then submit fictional follow-up or a test application using separate inboxes you control. Check that each reference receives their own form and that the guardian receives a consent email only when required. In Firestore, the private `beaconMailJobs` collection shows `pending`, `sending`, `sent`, `cancelled`, or `failed`. A `sent` job means Apps Script accepted the send. Inbox delivery can still be affected by spam filtering and provider policies.
+
+If a form email fails, open the entry in Committee and issue a replacement from **References and consent**. The replacement is queued through Apps Script and can also be copied for private delivery. Existing applications and submitted nomination follow-ups are not emailed retroactively. The Apps Script sender’s daily mail quota applies.
+
+If the Apps Script URL is blank, Beacon uses Firebase’s verification email and retains the manual form workflow. The deployed email worker still requires `BEACON_MAIL_SECRET` in Secret Manager. A configured Firebase Trigger Email extension can still handle decisions and Scholar account-claim invitations under the existing `BEACON_EMAIL_ENABLED` setting.

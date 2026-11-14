@@ -3,6 +3,7 @@ const {onCall,HttpsError}=require("firebase-functions/v2/https");
 const {defineString}=require("firebase-functions/params");
 const admin=require("firebase-admin");
 const crypto=require("node:crypto");
+const beaconMail=require("./beacon-mail");
 admin.initializeApp();
 const db=admin.firestore();
 const legacyIntake=defineString("BEACON_INTAKE_OPEN",{default:"false"});
@@ -71,8 +72,49 @@ function validateFinal(d){
 }
 const safeSummary=(d,id)=>({entryId:id,studentName:d.studentName||"",type:d.type||"self",cycle:d.cycle||cycle,status:d.status||"draft",grade:d.grade||"",referenceStatus:d.referenceStatus||"pending",guardianStatus:d.guardianStatus||"pending",createdAt:d.createdAt?.toDate?.()?.toISOString?.()||null});
 async function audit(action,entryId,uid,extra={}){await db.collection("auditLogs").add({action,entryId,actorUid:uid||null,at:stamp(),...extra});}
+exports.deliverBeaconMail=beaconMail.deliveryWorker(db,admin,origin);
+exports.sendBeaconVerification=onCall(opts,async r=>{
+ requireAuth(r);
+ if(!beaconMail.enabled())return {mode:"firebase"};
+ const user=await admin.auth().getUser(r.auth.uid);
+ if(user.emailVerified)return {mode:"verified"};
+ const recipient=mail(user.email);
+ if(!recipient||user.disabled)throw new HttpsError("failed-precondition","This account cannot receive a verification email.");
+ const limit=db.collection("beaconVerificationLimits").doc(r.auth.uid);
+ return db.runTransaction(async tx=>{
+  const current=(await tx.get(limit)).data();
+  const now=Date.now();
+  const sameDay=current?.day===new Date(now).toISOString().slice(0,10);
+  const count=sameDay?current.count:0;
+  if(now-(current?.last||0)<60000)return {mode:"queued"};
+  if(count>=5)throw new HttpsError("resource-exhausted","The daily verification email limit was reached. Please try tomorrow.");
+  beaconMail.queueMail(db,tx,stamp,{kind:"verification",uid:r.auth.uid,recipient});
+  tx.set(limit,{last:now,day:new Date(now).toISOString().slice(0,10),count:count+1});
+  return {mode:"queued"};
+ });
+});
+function createPrivateInvitation(tx,entryId,kind,slot,recipient,actorUid,studentName,send){
+ const token=SECRET(),invite=db.collection("invitations").doc(hash(token)),expires=Date.now()+14*86400000;
+ const url=origin+"/#"+(kind==="guardian"?"consent/":kind==="scholar"?"claim/":"reference/")+token;
+ tx.create(invite,{entryId,kind,slot:kind==="reference"?slot:null,recipientName:recipient.name||"",
+  recipientEmail:recipient.email,status:"pending",createdBy:actorUid,createdAt:stamp(),
+  expiresAt:admin.firestore.Timestamp.fromMillis(expires),usedAt:null});
+ tx.create(db.collection("auditLogs").doc(),{action:"invitation_created",entryId,actorUid,at:stamp(),kind,slot:kind==="reference"?slot:null});
+ if(send)beaconMail.queueMail(db,tx,stamp,{kind,entryId,inviteId:invite.id,recipient:recipient.email,url,studentName});
+ return {url,expiresAt:new Date(expires).toISOString()};
+}
+function queueStudentForms(tx,entryId,entry,uid,referenceSlots,guardianNeeded){
+ if(!beaconMail.enabled())return false;
+ for(const slot of referenceSlots){
+  createPrivateInvitation(tx,entryId,"reference",slot,entry.references[slot],uid,entry.studentName,true);
+ }
+ if(guardianNeeded){
+  createPrivateInvitation(tx,entryId,"guardian",null,{name:entry.guardianName,email:entry.guardianEmail},uid,entry.studentName,true);
+ }
+ return true;
+}
 exports.getProgramSettings=onCall(opts,async()=>({
- cycle,intakeOpen:isIntakeOpen(await intakeRef.get()),honoraryOnly:true
+ cycle,intakeOpen:isIntakeOpen(await intakeRef.get()),honoraryOnly:true,brandedVerification:beaconMail.enabled()
 }));
 exports.setIntakeStatus=onCall(opts,async r=>{
  owner(r);
@@ -86,7 +128,7 @@ exports.setIntakeStatus=onCall(opts,async r=>{
    action:"intake_status_changed",cycle,intakeOpen,actorUid:r.auth.uid,at:stamp()
   });
  });
- return {cycle,intakeOpen,honoraryOnly:true};
+ return {cycle,intakeOpen,honoraryOnly:true,brandedVerification:beaconMail.enabled()};
 });
 exports.getDraft=onCall(opts,async r=>{
  requireAuth(r);
@@ -116,9 +158,12 @@ exports.submitEntry=onCall(opts,async r=>{
   const draft=db.collection("drafts").doc(r.auth.uid+"_"+cycle);
   const key=db.collection("selfSubmissionKeys").doc(cycle+"_"+r.auth.uid);
   const entry=db.collection("entries").doc();
-  const entryId=await db.runTransaction(async tx=>{
+  const result=await db.runTransaction(async tx=>{
     const prior=await tx.get(key);
-    if(prior.exists)return prior.get("entryId");
+    if(prior.exists){
+     const existing=await tx.get(db.collection("entries").doc(prior.get("entryId")));
+     return {entryId:prior.get("entryId"),formsQueued:existing.get("formsQueued")===true};
+    }
     await requireOpenIntake(tx);
     const saved=await tx.get(draft);
     if(!saved.exists)err("Save your application first.");
@@ -126,19 +171,20 @@ exports.submitEntry=onCall(opts,async r=>{
     const guardian=fields.ageBand==="adult"?{guardianName:"",guardianEmail:"",guardianRelationship:""}:{};
     const d=normalize({...fields,...guardian,applicantEmail:r.auth.token.email});
     validateFinal(d);
+    const formsQueued=queueStudentForms(tx,entry.id,d,r.auth.uid,[0,1],d.ageBand==="minor");
     tx.create(key,{entryId:entry.id,createdAt:stamp()});
     tx.create(entry,{
       ...d,type:"self",entryId:entry.id,cycle,status:"submitted",applicantUid:r.auth.uid,
       submitterUid:r.auth.uid,submittedAt:stamp(),createdAt:stamp(),lastUpdatedAt:stamp(),
       publicId:null,studentDeclaration:{truthful:true,requirements:true,recordedAt:new Date().toISOString(),version:"2027-v1"},guardianStatus:d.ageBand==="adult"?"not_required":"pending",
       referenceStatus:"pending",referenceCount:0,selectionReady:false,decision:null,
-      duplicateKey:dedupe(d)
+      duplicateKey:dedupe(d),formsQueued
     });
     tx.delete(draft);
     tx.create(db.collection("auditLogs").doc(),{action:"self_submitted",entryId:entry.id,actorUid:r.auth.uid,at:stamp()});
-    return entry.id;
+    return {entryId:entry.id,formsQueued};
   });
-  return {received:true,entryId};
+  return {received:true,...result};
  }
  if(type!=="nomination")err("Unknown submission type.");
  if(!r.auth?.uid)throw new HttpsError("unauthenticated","Sign in or use the anonymous entry mode.");
@@ -263,7 +309,8 @@ exports.getReviewEntry=onCall(opts,async r=>{
    founderNote:isAdmin(r)?d.founderNote||"":"",
    nominationLetter:isAdmin(r)?{
     keyIssued:!!d.entryKeyHash,needsEntryKey:d.type==="nomination"&&!d.applicantUid&&!entryClosed(d.status),
-    followUpRequested:d.nominationFollowUp?.requestedAt?.toDate?.()?.toISOString?.()||null
+    followUpRequested:d.nominationFollowUp?.requestedAt?.toDate?.()?.toISOString?.()||null,
+    formsQueued:d.nominationFollowUp?.formsQueued===true
    }:null
  }};
 });
@@ -328,15 +375,26 @@ exports.createInvitation=onCall(opts,async r=>{
   const oldReference=await ref.collection("references").doc(String(slot)).get();
   if(oldReference.get("verified")===true)throw new HttpsError("failed-precondition","Reference already verified. Invalidate it before requesting a replacement.");
  }
- const previous=await db.collection("invitations").where("entryId","==",entryId).limit(100).get();
- const superseded=previous.docs.filter(x=>x.get("status")==="pending"&&x.get("kind")===kind&&(kind!=="reference"||x.get("slot")===slot));
- await Promise.all(superseded.map(x=>x.ref.update({status:"superseded",supersededAt:stamp()})));
- const token=SECRET(),invite=db.collection("invitations").doc(hash(token)),expires=Date.now()+14*86400000;
- await invite.set({entryId,kind,slot:kind==="reference"?slot:null,recipientName:recipient.name||"",recipientEmail:recipient.email,status:"pending",createdBy:r.auth.uid,createdAt:stamp(),expiresAt:admin.firestore.Timestamp.fromMillis(expires),usedAt:null});
- await audit("invitation_created",entryId,r.auth.uid,{kind,slot});
- const url=origin+"/#"+(kind==="guardian"?"consent/":kind==="scholar"?"claim/":"reference/")+token;
- let queued=false;
- if(mailEnabled.value()==="true"){
+ const useAppsScript=kind!=="scholar"&&beaconMail.enabled();
+ const {url,expiresAt}=await db.runTransaction(async tx=>{
+  const fresh=await tx.get(ref);
+  const record=fresh.data();
+  const currentEmail=kind==="guardian"?record?.guardianEmail:kind==="scholar"?record?.applicantEmail:record?.references?.[slot]?.email;
+  if(!record||currentEmail!==recipient.email||["merged","withdrawn"].includes(record.status)||
+     (kind!=="scholar"&&entryClosed(record.status))||
+     (kind==="guardian"&&(record.ageBand==="adult"||record.guardianStatus==="verified")))
+   throw new HttpsError("failed-precondition","The entry changed. Reopen the selection file and try again.");
+  if(kind==="reference"&&(await tx.get(ref.collection("references").doc(String(slot)))).get("verified")===true)
+   throw new HttpsError("failed-precondition","This reference is already verified.");
+  const previous=await tx.get(db.collection("invitations").where("entryId","==",entryId));
+  for(const old of previous.docs){
+   if(old.get("status")==="pending"&&old.get("kind")===kind&&(kind!=="reference"||old.get("slot")===slot))
+    tx.update(old.ref,{status:"superseded",supersededAt:stamp()});
+  }
+  return createPrivateInvitation(tx,entryId,kind,slot,recipient,r.auth.uid,d.studentName,useAppsScript);
+ });
+ let queued=useAppsScript;
+ if(!queued&&mailEnabled.value()==="true"){
    // The official Firebase Trigger Email extension must be configured for 'mail'
    // with a valid SMTP provider. No public client may write to this collection.
    await db.collection("mail").add({
@@ -350,7 +408,7 @@ exports.createInvitation=onCall(opts,async r=>{
    queued=true;
  }
  // An admin may copy the URL for secure manual delivery when automatic mail is disabled.
- return {url,recipientEmail:recipient.email,expiresAt:new Date(expires).toISOString(),queued};
+ return {url,recipientEmail:recipient.email,expiresAt,queued};
 });
 exports.getInvitation=onCall(opts,async r=>{
  const token=str(r.data?.token,150),s=await db.collection("invitations").doc(hash(token)).get();
@@ -602,6 +660,7 @@ async function nominationFollowUp(snapshot){
  return {
   canSubmit:!entryClosed(snapshot.get("status"))&&!submitted?.requestedAt,
   requested:!!submitted?.requestedAt,
+  formsQueued:submitted?.formsQueued===true,
   ageBand:snapshot.get("ageBand")||"",
   guardianLocked:!!snapshot.get("guardianRecord")?.consent&&snapshot.get("guardianStatus")!=="withdrawn",
   references:[0,1].map(slot=>{
@@ -620,7 +679,8 @@ exports.submitNominationFollowUp=onCall(opts,async r=>{
   const snapshot=await tx.get(entry);
   if(!snapshot.exists||snapshot.get("type")!=="nomination"||snapshot.get("applicantUid")!==r.auth.uid)
    throw new HttpsError("permission-denied","This nomination is not connected to your account.");
-  if(snapshot.get("nominationFollowUp")?.requestedAt)return {ok:true};
+  const prior=snapshot.get("nominationFollowUp");
+  if(prior?.requestedAt)return {ok:true,formsQueued:prior.formsQueued===true};
   if(entryClosed(snapshot.get("status")))throw new HttpsError("failed-precondition","This nomination is no longer under consideration.");
   const responses=await Promise.all([0,1].map(slot=>tx.get(entry.collection("references").doc(String(slot)))));
   const contacts=references(fields.references);
@@ -645,11 +705,25 @@ exports.submitNominationFollowUp=onCall(opts,async r=>{
   const guardianStatus=ageBand==="adult"?"not_required":guardianLocked?snapshot.get("guardianStatus"):"pending";
   const referenceCount=responses.filter(response=>response.get("verified")===true).length;
   const referenceStatus=referenceCount===2?"verified":responses.some(response=>response.exists&&response.get("verified")!==true)?"awaiting_verification":"pending";
+  const slots=[0,1].filter(slot=>!responses[slot].exists);
+  const guardianNeeded=ageBand==="minor"&&!guardianLocked;
+  if(beaconMail.enabled()){
+   const previous=await tx.get(db.collection("invitations").where("entryId","==",entryId));
+   for(const invitation of previous.docs){
+    const kind=invitation.get("kind");
+    if(invitation.get("status")==="pending"&&
+       ((kind==="reference"&&slots.includes(invitation.get("slot")))||(kind==="guardian"&&guardianNeeded)))
+     tx.update(invitation.ref,{status:"superseded",supersededAt:stamp()});
+   }
+  }
+  const formsQueued=queueStudentForms(tx,entryId,{
+   references:nextReferences,guardianName,guardianEmail,studentName:snapshot.get("studentName")
+  },r.auth.uid,slots,guardianNeeded);
   tx.update(entry,{references:nextReferences,ageBand,guardianName,guardianEmail,guardianStatus,referenceCount,referenceStatus,
    ...(guardianLocked?{}:{guardianRecord:admin.firestore.FieldValue.delete()}),
-   nominationFollowUp:{requestedAt:stamp()},lastUpdatedAt:stamp()});
+   nominationFollowUp:{requestedAt:stamp(),formsQueued},lastUpdatedAt:stamp()});
   tx.create(db.collection("auditLogs").doc(),{action:"nomination_follow_up_requested",entryId,actorUid:r.auth.uid,at:stamp()});
-  return {ok:true};
+  return {ok:true,formsQueued};
  });
 });
 

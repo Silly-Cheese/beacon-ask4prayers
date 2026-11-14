@@ -154,20 +154,28 @@ $("auth-form").addEventListener("submit",async e=>{
  try{await signInWithEmailAndPassword(auth,String(d.get("email")).trim(),String(d.get("password")));notify("Signed in to Beacon.");location.hash="#"+accountReturn;}
  catch(err){notify(readable(err));}
 });
+async function requestVerification(user){
+ if(settings.brandedVerification){
+  const result=await call("sendBeaconVerification");
+  if(result.mode==="queued")return "Verification email queued. Check your inbox and spam folder.";
+  if(result.mode==="verified")return "Your email is already verified.";
+ }
+ await sendEmailVerification(user);
+ return "Verification email sent. Check your inbox.";
+}
 $("create-account").addEventListener("click",async()=>{
  const form=$("auth-form");if(!form.reportValidity())return;
  const d=new FormData(form);
  try{
   const cred=await createUserWithEmailAndPassword(auth,String(d.get("email")).trim(),String(d.get("password")));
   try{
-   await sendEmailVerification(cred.user);
-   notify("Account created. Check your inbox to verify your email before submitting.");
+   notify("Account created. "+await requestVerification(cred.user));
   }catch(e){notify("Account created. Use the button on your account page to resend the verification email.");}
   location.hash="#"+accountReturn;
  }catch(e){notify(readable(e));}
 });
 $("sign-out").addEventListener("click",async()=>{await signOut(auth);draftLoadedFor=null;notify("Signed out.");location.hash="#home";});
-$("verify-email").addEventListener("click",async()=>{try{await sendEmailVerification(auth.currentUser);notify("Verification email sent.");}catch(e){notify(readable(e));}});
+$("verify-email").addEventListener("click",async()=>{try{notify(await requestVerification(auth.currentUser));}catch(e){notify(readable(e));}});
 $("reset-password").addEventListener("click",async()=>{
  const email=String(new FormData($("auth-form")).get("email")||"").trim();
  if(!email){notify("Enter your account email first.");return;}
@@ -368,6 +376,7 @@ student.addEventListener("submit",async e=>{
   submittedApplication={entryId:result.entryId,type:"self"};
   clearTimeout(saveTimer);student.reset();
   showReceipt("student",result.entryId,"self");
+  if(result.formsQueued)notify("Application submitted. Outstanding form emails were queued.");
  }catch(e){await intakeError("student",e);}
  finally{studentBusy=false;refreshGates();}
 });
@@ -526,7 +535,9 @@ function nominationFollowUpPanel(entry,root){
   ["Academic reference",followUp.references[0]],["Character reference",followUp.references[1]]
  ]));
  if(followUp.requested){
-  panel.append(el("p","Beacon received your details. The team will follow up with your references and, if required, send your parent or guardian a private consent form. You can check progress here.","muted"));
+  panel.append(el("p",followUp.formsQueued
+   ?"Beacon received your details and queued emails for any outstanding forms. Check here for responses."
+   :"Beacon received your details. The team will arrange any outstanding reference or guardian consent forms.","muted"));
   return panel;
  }
  if(!followUp.canSubmit)return panel;
@@ -574,8 +585,8 @@ function nominationFollowUpPanel(entry,root){
   };
   submit.disabled=true;error.hidden=true;
   try{
-   await call("submitNominationFollowUp",{entryId:entry.entryId,fields});
-   notify("Your follow-up is on file. Beacon will arrange the requested forms.");
+   const result=await call("submitNominationFollowUp",{entryId:entry.entryId,fields});
+   notify(result.formsQueued?"Your follow-up is on file. Outstanding form emails were queued.":"Your follow-up is on file. Beacon will arrange the requested forms.");
    const {entry:updated}=await call("getMyEntry",{entryId:entry.entryId});
    showEntryDetails(root,updated);
   }catch(err){error.textContent=readable(err);error.hidden=false;}
@@ -943,7 +954,9 @@ async function openReview(entryId){
    if(d[key])story.append(el("h3",label),el("p",d[key]));
   }
   if(d.canManage&&d.nominationLetter?.followUpRequested)
-   core.append(el("p","Student follow-up received. Use References and consent to issue any outstanding forms.","callout"));
+   core.append(el("p",d.nominationLetter.formsQueued
+    ?"Student follow-up received. Outstanding form emails were queued."
+    :"Student follow-up received. Use References and consent to issue any outstanding forms.","callout"));
   if(story.childElementCount)core.append(story);
   if(d.duplicateCount>1){core.append(el("p","Potential duplicate entries: "+d.duplicateCount+" records share the same student name, school and graduation year. Review without assuming they are duplicates.","callout"));}
   if((d.endorsements||[]).length){
@@ -1126,7 +1139,7 @@ async function invitation(entryId,kind,slot){
   let panel=$("private-invite-link");if(panel)panel.remove();
   panel=el("div",undefined,"review-card");panel.id="private-invite-link";
   panel.append(el("h3","Private invitation for "+result.recipientEmail));
-  panel.append(el("p",result.queued?"An invitation email was queued through the configured Firebase mail extension. Verify delivery status before relying on it.":"Copy this one-time link and deliver it privately to the intended email recipient. Automatic email is not enabled. Verify the recipient before approving.","help"));
+  panel.append(el("p",result.queued?"An invitation email was queued. You can also copy the private link below.":"Copy this one-time link and deliver it privately to the intended email recipient. Automatic email is not enabled. Verify the recipient before approving.","help"));
   const input=el("input");input.readOnly=true;input.value=result.url;input.setAttribute("aria-label","Private invitation URL");input.style.width="100%";
   panel.append(input);
   const button=el("button","Copy invitation URL","btn btn-outline");button.type="button";
