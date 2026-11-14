@@ -5,7 +5,6 @@ GitHub Pages serves [Beacon Scholars](https://beacon.ask4prayers.com/) from the 
 ## Firebase setup
 
 - In [Firebase Authentication](https://console.firebase.google.com/project/beacon-ask4prayers/authentication/providers), enable Email/Password for applicants and named or confidential nominators, and Anonymous for anonymous nominations. Authorize `beacon.ask4prayers.com` for Auth.
-- In [Firebase App Check](https://console.firebase.google.com/project/beacon-ask4prayers/appcheck), verify that the web app is registered with the reCAPTCHA Enterprise site key used in `firebase.js` and that the live domain is allowed by that key. Submissions and draft operations require App Check.
 - Ensure the Firestore database exists. Use the existing Firebase custom claims to assign a program administrator and the selection committee. The administrator can issue private guardian and reference links for manual delivery or queue them through the configured Trigger Email extension.
 
 ## Deploy and open
@@ -38,4 +37,4 @@ Invoke-RestMethod -Method Post `
 
 Expect `cycle: 2027`, `intakeOpen: True`, and `honoraryOnly: True` after launch. On the live site, verify that both entry pages show as open. Use fictional data to test a verified student saving and submitting, an anonymous nomination, and a named nomination after sign-in. Confirm each receipt appears in the committee queue, then verify a private guardian and reference invitation through completion. Reviewers should see reference responses without names, signatures, email addresses or confidential nominator records.
 
-If the status endpoint returns 404, check that `getProgramSettings` appears under Functions in the correct project and region. If the status is open but submissions fail, check App Check metrics and the relevant Auth provider before changing the launch flag.
+If the status endpoint returns 404, check that `getProgramSettings` appears under Functions in the correct project and region. If the status is open but submissions fail, check the relevant Auth provider and the deployed Functions logs.

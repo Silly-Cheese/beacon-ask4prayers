@@ -6,7 +6,7 @@ Repository: \`Silly-Cheese/beacon-ask4prayers\` • GitHub Pages: \`beacon.ask4p
 - Coordinated **black, ivory and warm-beige** visual system based on The Prayer Project's \`theme.css\`, \`home.css\`, and Beacon recognition pages.
 - Student users **must create a Firebase email/password account**; email verification is required for final submission.
 - Seven application sections: identity, academic journey, character/service, personal essay, two references, guardian, review.
-- Drafts autosave to Firestore through App Check-protected callable functions; protected from all direct client Firestore reads and writes. Resuming a draft requires account sign-in.
+- Drafts autosave to Firestore through authenticated callable functions; protected from all direct client Firestore reads and writes. Resuming a draft requires account sign-in.
 - Official nominations: named, confidential or fully anonymous. Nominees **do not** have to reapply. Fully anonymous nominators cannot serve as verified references.
 - Private one-time invitations for one academic and one character reference and guardian consent; recipient responses are recorded and require administrative identity checks before being marked verified.
 - Nominated students can claim their existing entry using an email-bound invite token and their own verified Firebase account.
@@ -20,17 +20,16 @@ Repository: \`Silly-Cheese/beacon-ask4prayers\` • GitHub Pages: \`beacon.ask4p
 See [DEPLOYMENT.md](DEPLOYMENT.md) for the current launch and verification commands.
 1. Verify GitHub Pages uses main/root and HTTPS for beacon.ask4prayers.com.
 2. Configure Firebase Authentication: Email/Password and Anonymous providers; authorize beacon.ask4prayers.com.
-3. Register reCAPTCHA Enterprise **score-based** web key in Firebase App Check. The public site key is now stored as a quoted string in \`firebase.js\` under \`APP_CHECK_SITE_KEY\`. Confirm it matches the Firebase App Check registration; the console does not update this file automatically. Never place a secret API key/service account into source code.
-4. Run \`npm install\` in \`functions\` and deploy using the Firebase CLI from repo root:
+3. Run \`npm install\` in \`functions\` and deploy using the Firebase CLI from repo root:
    \`firebase deploy --project beacon-ask4prayers --only firestore:rules,storage,functions\`.
    **Do not deploy Firebase Hosting.**
-5. Keep \`BEACON_INTAKE_OPEN=false\` in Firebase Functions environment until all minor privacy, consent, mail, abuse and review workflows have been tested.
-6. Optionally install Firebase **Trigger Email** extension configured to watch the private \`mail\` collection. Set up SMTP with verified FROM address in the extension. Then set \`BEACON_EMAIL_ENABLED=true\` in Functions environment before deployment to queue invitation and decision messages. Without it, authorized admins generate private URLs for secure manual delivery; do not imply an email was sent.
-7. Use Google Cloud Application Default Credentials in a trusted environment and the server-only role script to designate one program administrator and 3–5 independent reviewers. Example in a terminal where ADC has been securely configured:
+4. Keep \`BEACON_INTAKE_OPEN=false\` in Firebase Functions environment until all minor privacy, consent, mail, abuse and review workflows have been tested.
+5. Optionally install Firebase **Trigger Email** extension configured to watch the private \`mail\` collection. Set up SMTP with verified FROM address in the extension. Then set \`BEACON_EMAIL_ENABLED=true\` in Functions environment before deployment to queue invitation and decision messages. Without it, authorized admins generate private URLs for secure manual delivery; do not imply an email was sent.
+6. Use Google Cloud Application Default Credentials in a trusted environment and the server-only role script to designate one program administrator and 3–5 independent reviewers. Example in a terminal where ADC has been securely configured:
    \`node grant-role.cjs admin@example.org admin\`
    \`node grant-role.cjs reviewer@example.org reviewer\`
    Do not run the role script from a public website, do not commit credentials. Make sure \`firebase-admin\` is available from the current working directory (run \`npm install\` under the functions folder and run script from there with \`node ../scripts/grant-role.cjs\`).
-8. Test with fictional data and Firebase Emulator Suite before processing student information. Sign out/in after custom claims change.
+7. Test with fictional data and Firebase Emulator Suite before processing student information. Sign out/in after custom claims change.
 
 ## Essential safeguards and limits
 - A complete nomination is a valid *entry*, not a guaranteed final selection.
@@ -42,13 +41,13 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) for the current launch and verification comma
 - A selected student may print the digital letter/certificate. Printed founder's name is not a cryptographic signature. Mailing requires a separate validated fulfillment process.
 - Public recognition is optional; the platform does not publish home addresses or protected reference responses.
 - Only authenticated server-side administrators can manage invitations and finalize selections.
-- Domain verification, Firebase project configuration, App Check site key, SMTP extension, custom roles and public intake must be finished by the site operator. This repository cannot activate those console settings.
+- Domain verification, Firebase project configuration, SMTP extension, custom roles and public intake must be finished by the site operator. This repository cannot activate those console settings.
 - Intake stays closed by default even when the site is publicly accessible.
 
 ## Remaining production acceptance work
 - Publish approved privacy, eligibility, record-retention and child protection policies, including an appeals/corrections procedure.
 - Operationally verify consent and reference sender identities, student age and GPA eligibility (2.5 or greater per founding program rules).
-- Add hardened spam controls beyond per-account rate limits and App Check.
+- Add hardened spam controls beyond per-account rate limits.
 - Configure transactional email, delivery retry and bounced-email reconciliation.
 - Conduct a supervised full test across student, anonymous nominator, guardian, references, committee and Scholar acceptance.
 - Consider server-rendered PDF issuance with document signature metadata and official mail-fulfillment tracking when ready.

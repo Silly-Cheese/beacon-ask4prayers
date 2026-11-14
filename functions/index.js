@@ -9,7 +9,7 @@ const open=defineString("BEACON_INTAKE_OPEN",{default:"false"});
 const mailEnabled=defineString("BEACON_EMAIL_ENABLED",{default:"false"});
 const cycle="2027";
 const origin="https://beacon.ask4prayers.com";
-const opts={region:"us-central1",cors:[origin,"https://silly-cheese.github.io"],maxInstances:10,memory:"256MiB",enforceAppCheck:true};
+const opts={region:"us-central1",cors:[origin,"https://silly-cheese.github.io"],maxInstances:10,memory:"256MiB"};
 const stamp=()=>admin.firestore.FieldValue.serverTimestamp();
 const clean=(v,n=180)=>typeof v==="string"?v.trim().slice(0,n):"";
 const mail=v=>{const s=clean(v,254).toLowerCase();if(s&&!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s))throw new HttpsError("invalid-argument","Invalid email address.");return s;};
@@ -64,7 +64,7 @@ function validateFinal(d){
 }
 const safeSummary=(d,id)=>({entryId:id,studentName:d.studentName||"",type:d.type||"self",cycle:d.cycle||cycle,status:d.status||"draft",grade:d.grade||"",referenceStatus:d.referenceStatus||"pending",guardianStatus:d.guardianStatus||"pending",createdAt:d.createdAt?.toDate?.()?.toISOString?.()||null});
 async function audit(action,entryId,uid,extra={}){await db.collection("auditLogs").add({action,entryId,actorUid:uid||null,at:stamp(),...extra});}
-exports.getProgramSettings=onCall({...opts,enforceAppCheck:false},async()=>({cycle,intakeOpen:intakeOpen(),honoraryOnly:true}));
+exports.getProgramSettings=onCall(opts,async()=>({cycle,intakeOpen:intakeOpen(),honoraryOnly:true}));
 exports.getDraft=onCall(opts,async r=>{
  requireAuth(r);
  const snap=await db.collection("drafts").doc(r.auth.uid+"_"+cycle).get();
@@ -140,7 +140,7 @@ exports.submitEntry=onCall(opts,async r=>{
  const receipt=requestId?db.collection("nominationReceipts").doc(hash(cycle+":"+requestId)):null;
  const doc=db.collection("entries").doc();
  const day=new Date().toISOString().slice(0,10);
- // per UID quota is intentionally conservative; App Check is also mandatory.
+ // Limit nominations per authenticated account, including anonymous Firebase accounts.
  const quota=db.collection("submissionQuotas").doc(hash(r.auth.uid+day));
  const entryId=await db.runTransaction(async tx=>{
   if(receipt){

@@ -29,6 +29,6 @@ The program starts as **honorary recognition only**. Bibles Within Reach comes f
 See [IMPLEMENTATION.md](IMPLEMENTATION.md) for data collections, email configuration, custom claims, and committee operations.
 
 ## Security notes
-Student data is restricted to privileged server-side Cloud Functions. Firestore and Storage rules deny browser direct access to private collections. Functions use Firebase App Check and Firebase Authentication where required. Do not commit service-account keys, secret provider credentials, unredacted student applications or API secrets.
+Student data is restricted to privileged server-side Cloud Functions. Firestore and Storage rules deny browser direct access to private collections. Functions enforce Firebase Authentication and check the caller’s role where required. Do not commit service-account keys, secret provider credentials, unredacted student applications or API secrets.
 
-The Firebase web config is designed to be public. The reCAPTCHA Enterprise site key is also public, **but must be inserted into \`firebase.js\` after the app is registered**. Never use a secret/reCAPTCHA server key in frontend source.
+The Firebase web configuration is public.

@@ -1,4 +1,4 @@
-import {auth,callable,APP_CHECK_SITE_KEY} from "./firebase.js";
+import {auth,callable} from "./firebase.js";
 import {
   onAuthStateChanged,signInWithEmailAndPassword,createUserWithEmailAndPassword,
   signInAnonymously,signOut,sendEmailVerification,sendPasswordResetEmail,reload
@@ -19,7 +19,6 @@ function notify(msg){
 }
 function readable(e){
   const c=String(e?.code||"");
-  if(c.includes("app-check"))return "The secure service could not verify your browser. Reload the page and try again.";
   if(c.includes("failed-precondition"))return e.message||"A required verification step is incomplete.";
   if(c.includes("permission-denied"))return "This action requires additional authorization.";
   if(c.includes("unauthenticated"))return "Sign in with your Beacon account first.";
@@ -125,7 +124,7 @@ async function init(){
  route();
  try{
   settings=await call("getProgramSettings");
-  intakeState=!APP_CHECK_SITE_KEY||typeof settings?.intakeOpen!=="boolean"?"unavailable":settings.intakeOpen?"open":"closed";
+  intakeState=typeof settings?.intakeOpen!=="boolean"?"unavailable":settings.intakeOpen?"open":"closed";
  }catch{
   intakeState="unavailable";
  }
