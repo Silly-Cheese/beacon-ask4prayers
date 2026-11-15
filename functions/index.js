@@ -295,29 +295,55 @@ exports.listReviewQueue=onCall(opts,async r=>{
  }
  const [q,settings]=await Promise.all([query.limit(81).get(),isAdmin(r)?intakeRef.get():null]);
  const page=q.docs.slice(0,80);
- return {entries:page.map(s=>safeSummary(s.data(),s.id)),nextCursor:q.size>80?page.at(-1).id:null,
-  intake:settings?intakeSettings(settings):null
+ const [personalReviews,recusals]=page.length?await Promise.all([
+  db.getAll(...page.map(doc=>doc.ref.collection("reviews").doc(r.auth.uid)),{fieldMask:["recommend"]}),
+  db.getAll(...page.map(doc=>doc.ref.collection("recusals").doc(r.auth.uid)),{fieldMask:["uid"]})
+ ]):[[],[]];
+ const reviewedIds=new Set(personalReviews.filter(doc=>doc.exists).map(doc=>doc.ref.parent.parent.id));
+ const recusedIds=new Set(recusals.filter(doc=>doc.exists).map(doc=>doc.ref.parent.parent.id));
+ const entries=page.flatMap(doc=>{
+  if(recusedIds.has(doc.id))return [];
+  const entry=doc.data();
+  return [{...safeSummary(entry,doc.id),school:entry.school||"",myReviewSaved:reviewedIds.has(doc.id),
+   requirementsPending:selectionRequirements(entry).length}];
+ });
+ return {entries,nextCursor:q.size>80?page.at(-1).id:null,
+  intake:settings?intakeSettings(settings):null,personalReviewQueue:true
  };
 });
 exports.getReviewEntry=onCall(opts,async r=>{
  staff(r);
- const id=str(r.data?.entryId,140),snap=await db.collection("entries").doc(id).get();
+ const id=str(r.data?.entryId,140);
+ if(!id||id.includes("/"))err("Choose an entry.");
+ const ref=db.collection("entries").doc(id);
+ const [snap,recusal]=await Promise.all([ref.get(),ref.collection("recusals").doc(r.auth.uid).get()]);
  if(!snap.exists)throw new HttpsError("not-found","Entry not found.");
+ if(recusal.exists)throw new HttpsError("permission-denied","You have recused yourself from reviewing this entry.");
  const d=snap.data();
- const refs=await db.collection("entries").doc(id).collection("references").get();
- const votes=await db.collection("entries").doc(id).collection("reviews").get();
- const endorsements=await db.collection("entries").doc(id).collection("endorsements").limit(20).get();
- const recusals=await db.collection("entries").doc(id).collection("recusals").get();
- if(recusals.docs.some(x=>x.id===r.auth.uid))throw new HttpsError("permission-denied","You have recused yourself from reviewing this entry.");
+ const [refs,votes,endorsements,duplicates]=await Promise.all([
+  ref.collection("references").get(),ref.collection("reviews").get(),ref.collection("endorsements").limit(20).get(),
+  d.duplicateKey?db.collection("entries").where("duplicateKey","==",d.duplicateKey).limit(10).get():null
+ ]);
+ const mine=votes.docs.find(vote=>vote.id===r.auth.uid)?.data()||null;
+ const approvals=votes.docs.filter(vote=>vote.get("recommend")==="select").length;
+ const manage=isAdmin(r);
+ const roster=manage&&d.status==="finalist"&&d.cycle===cycle
+  ?await db.collection("entries").where("status","==","selected").where("cycle","==",cycle).limit(2).get():null;
+ const decisionReadiness=manage&&!entryClosed(d.status)?{
+  method:votes.size<3?"founder":"committee",
+  select:[...decisionBlockers(d,"select",votes,mine),
+   ...(roster?.size>=2?["Two Beacon Scholars have already been selected for this class."]:[])],
+  decline:decisionBlockers(d,"decline",votes,mine)
+ }:null;
  return {entry:{
    ...safeSummary(d,id),selectionStages:true,canManage:isAdmin(r),school:d.school,graduationYear:d.graduationYear,gpa:d.gpa,
    personalStatement:d.personalStatement,activities:d.activities,academicInterests:d.academicInterests,
    service:d.service,futureGoals:d.futureGoals,responsibilities:d.responsibilities,
-   honors:d.honors,additionalInfo:d.additionalInfo,guardianStatus:d.guardianStatus,
+   honors:d.honors,additionalInfo:d.additionalInfo,
    referenceStatus:d.referenceStatus,referenceCount:d.referenceCount||0,
    nominationFollowUpNeeded:!!d.entryKeyHash&&!d.nominationFollowUp?.requestedAt,
    referenceSuggestions:isAdmin(r)?d.references||[]:[],
-   duplicateCount:(await db.collection("entries").where("duplicateKey","==",d.duplicateKey).limit(10).get()).size,
+   duplicateCount:duplicates?.size||0,
    nominator:isAdmin(r)&&d.privacy!=="anonymous"?d.nominator:null,
    duplicateKey:d.duplicateKey,eligibilityNote:isAdmin(r)?d.eligibilityNote||"":"",
    references:refs.docs.map(x=>{
@@ -336,10 +362,13 @@ exports.getReviewEntry=onCall(opts,async r=>{
      nominator:isAdmin(r)?v.get("nominator"):null,
      sourceEntryId:isAdmin(r)?v.get("sourceEntryId"):null
    })),
-   reviewCount:votes.size,decisionFromStatus:isAdmin(r)?d.decisionFromStatus||null:null,
-   finalistAt:d.finalistAt?.toDate?.()?.toISOString?.()||null,decisionMethod:isAdmin(r)?d.decisionMethod||null:null,approveVotes:votes.docs.filter(x=>x.get("recommend")==="select").length,
-   myReview:votes.docs.find(x=>x.id===r.auth.uid)?.data()||null,
-   recusalCount:recusals.size,
+   reviewCount:votes.size,decisionFromStatus:manage?d.decisionFromStatus||null:null,
+   finalistAt:d.finalistAt?.toDate?.()?.toISOString?.()||null,decisionMethod:manage?d.decisionMethod||null:null,
+   approveVotes:manage||mine?approvals:null,
+   myReview:mine?{scores:mine.scores,total:mine.total,recommend:mine.recommend,notes:mine.notes,
+    submittedAt:mine.submittedAt?.toDate?.()?.toISOString?.()||null}:null,decisionReadiness,
+   requirements:selectionRequirements(d).map(({code})=>code),
+   guardianStatus:d.ageBand==="adult"?"not_required":d.guardianStatus||"pending",
    founderNote:isAdmin(r)?d.founderNote||"":"",
    nominationLetter:isAdmin(r)?{
     keyIssued:!!d.entryKeyHash,needsEntryKey:d.type==="nomination"&&!d.applicantUid&&!entryClosed(d.status),
@@ -388,13 +417,37 @@ exports.recordReview=onCall(opts,async r=>{
  return {ok:true};
 });
 const reviewStages=["submitted","screening","under_review","finalist"];
-function requireSelectionRequirements(entry){
+function selectionRequirements(entry){
+ const pending=[];
  if(entry.entryKeyHash&&!entry.nominationFollowUp?.requestedAt)
-  throw new HttpsError("failed-precondition","The nominee must connect their Entry Key and submit their follow-up details first.");
- if(!entry.verifiedEligibility)throw new HttpsError("failed-precondition","Eligibility must be verified first.");
- if((entry.referenceCount||0)<2)throw new HttpsError("failed-precondition","Two verified references are required.");
+  pending.push({code:"follow_up",message:"The nominee must connect their Entry Key and submit their follow-up details first."});
+ if(!entry.verifiedEligibility)
+  pending.push({code:"eligibility",message:"Eligibility must be verified first."});
+ if((entry.referenceCount||0)<2)
+  pending.push({code:"references",message:"Two verified references are required."});
  if(entry.ageBand!=="adult"&&entry.guardianStatus!=="verified")
-  throw new HttpsError("failed-precondition","Guardian consent must be verified.");
+  pending.push({code:"consent",message:"Guardian consent must be verified."});
+ return pending;
+}
+function requireSelectionRequirements(entry){
+ const missing=selectionRequirements(entry)[0];
+ if(missing)throw new HttpsError("failed-precondition",missing.message);
+}
+function decisionBlockers(entry,decision,votes,mine,method=votes.size<3?"founder":"committee"){
+ const reasons=decision==="select"?selectionRequirements(entry).map(item=>item.message):[];
+ if(decision==="select"&&entry.status!=="finalist")reasons.unshift("Advance this student to Finalist before selecting a Beacon Scholar.");
+ if(decision==="decline"&&!entry.verifiedEligibility)reasons.push("Eligibility must be verified first.");
+ if(method==="founder"){
+  if(votes.size>=3)reasons.push("Use the committee decision once three evaluations are on file.");
+  else if(mine?.recommend!==decision)reasons.push(decision==="select"
+   ?"Save your own evaluation with a recommendation to select."
+   :"Save your own evaluation with a recommendation against selection.");
+ }else if(votes.size<3||votes.size>5){
+  reasons.push("Committee decisions require 3–5 evaluations. With fewer than three, save your evaluation and use Founder review.");
+ }else if(decision==="select"&&votes.docs.filter(vote=>vote.get("recommend")==="select").length<2){
+  reasons.push("Selection needs at least two favorable recommendations.");
+ }
+ return reasons;
 }
 exports.setEligibility=onCall(opts,async r=>{
  owner(r);
@@ -606,25 +659,13 @@ exports.finalizeDecision=onCall(opts,async r=>{
   if(entryClosed(d.status))throw new HttpsError("failed-precondition","Entry cannot be finalized.");
   if(r.data?.fromStatus&&r.data.fromStatus!==d.status)
    throw new HttpsError("failed-precondition","The stage changed. Reload the selection file and try again.");
-  if(!d.verifiedEligibility)throw new HttpsError("failed-precondition","Eligibility must be verified first.");
-  if(decision==="select"){
-   if(d.status!=="finalist")throw new HttpsError("failed-precondition","Advance this student to Finalist before selecting a Beacon Scholar.");
-   requireSelectionRequirements(d);
-  }
   const [votes,recusal]=await Promise.all([
    tx.get(entry.collection("reviews")),tx.get(entry.collection("recusals").doc(r.auth.uid))
   ]);
   if(recusal.exists)throw new HttpsError("permission-denied","You recused yourself from this entry.");
-  if(method==="founder"){
-   if(votes.size>=3)throw new HttpsError("failed-precondition","Use the committee decision once three evaluations are on file.");
-   const evaluation=votes.docs.find(vote=>vote.id===r.auth.uid);
-   if(evaluation?.get("recommend")!==decision)
-    throw new HttpsError("failed-precondition","Save your own evaluation with a recommendation that matches this decision.");
-  }else{
-   if(votes.size<3||votes.size>5)throw new HttpsError("failed-precondition","Committee decisions require 3–5 evaluations. With fewer than three, save your evaluation and use Founder review.");
-   if(decision==="select"&&votes.docs.filter(vote=>vote.get("recommend")==="select").length<2)
-    throw new HttpsError("failed-precondition","Selection needs at least two favorable recommendations.");
-  }
+  const mine=votes.docs.find(vote=>vote.id===r.auth.uid)?.data()||null;
+  const [blocker]=decisionBlockers(d,decision,votes,mine,method);
+  if(blocker)throw new HttpsError("failed-precondition",blocker);
   const selected=decision==="select",entryCycle=d.cycle||cycle;
   if(selected&&entryCycle===cycle){
    const lock=intakeRef;

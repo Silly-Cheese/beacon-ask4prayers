@@ -118,6 +118,7 @@ onAuthStateChanged(auth,async u=>{
  const previousUid=currentUser?.isAnonymous?null:currentUser?.uid;
  const nextUid=u?.isAnonymous?null:u?.uid;
  if(previousUid!==nextUid){
+  queueStage=queueType=queueWork="all";queueSearch="";queuePages=1;reviewDrafts.clear();
   clearTimeout(saveTimer);draftLoadedFor=null;draftLoading=null;submittedApplication=null;step=0;
   student.reset();$("student-receipt").hidden=true;$("student-receipt").replaceChildren();
   formError("student");countEssay();toggleGuardian();updateStep();
@@ -467,10 +468,10 @@ function workspaceCard(title,description){
 function workspaceLink(label,href,kind="btn-outline"){
  const link=el("a",label,"btn "+kind);link.href=href;return link;
 }
-function entryRow(entry,buttonLabel,onClick){
+function entryRow(entry,buttonLabel,onClick,school){
  const row=el("article",undefined,"entry-row workspace-entry");
  const info=el("div");
- info.append(el("h3",entry.studentName),el("p",entryType(entry)+" · "+entry.cycle+(entry.grade?" · Grade "+entry.grade:"")));
+ info.append(el("h3",entry.studentName),el("p",entryType(entry)+" · "+entry.cycle+(entry.grade?" · Grade "+entry.grade:"")+(school?" · "+school:"")));
  const actions=el("div",undefined,"workspace-actions");
  const button=el("button",buttonLabel,"btn btn-outline");button.type="button";button.onclick=onClick;
  actions.append(statusBadge(entry.status),button);
@@ -915,6 +916,8 @@ function renderIntakeControls(program){
   try{
    program=await call("setIntakeStatus",data);
    updateIntakeStatus(program);
+   panel.closest("details")?.querySelector("summary")?.replaceChildren("Intake settings · "+(program.intakeOpen?"Open":"Closed"));
+   notify("Intake settings saved.");
   }catch(e){error.textContent=readable(e);error.hidden=false;}
   finally{save.disabled=input.disabled=false;render();}
  };
@@ -925,8 +928,9 @@ function renderIntakeControls(program){
  return panel;
 }
 
-let queueStage="all",queueSearch="";
-async function showCommittee(){
+let queueStage="all",queueSearch="",queueType="all",queueWork="all",queuePages=1;
+const reviewDrafts=new Map();
+async function showCommittee(focusQueue=false){
  const box=$("committee-content"),detail=$("review-detail");
  const request=++reviewRequest;
  box.hidden=false;detail.hidden=true;detail.replaceChildren();box.textContent="Checking access…";
@@ -940,48 +944,99 @@ async function showCommittee(){
   const result=await call("listReviewQueue");
   if(!stillHere())return;
   box.replaceChildren();
-  if(result.intake)box.append(renderIntakeControls(result.intake));
-  const entries=result.entries||[];
-  const queue=workspaceCard("Selection queue","Filter by stage or find a student by name or entry ID.");
-  const filters=el("div",undefined,"field-grid queue-filters");
-  const stageField=el("label","Selection stage");
-  const filter=el("select");
-  for(const [value,label] of [["all","All stages"],...selectionStages.map(stage=>[stage,statusText(stage)]),["closed","Closed files"]]){
-   const option=el("option",label);option.value=value;filter.append(option);
+  if(result.intake){
+   const intake=el("details",undefined,"workspace-card committee-settings");
+   intake.append(el("summary","Intake settings · "+(result.intake.intakeOpen?"Open":"Closed")),renderIntakeControls(result.intake));
+   box.append(intake);
   }
-  filter.value=queueStage;
-  const searchField=el("label","Find a student");
-  const search=el("input");search.type="search";search.placeholder="Name or entry ID";search.value=queueSearch;
-  stageField.append(filter);searchField.append(search);filters.append(stageField,searchField);
+  const entries=[...(result.entries||[])];
+  let cursor=result.nextCursor;
+  let pages=1;
+  async function nextPage(){
+   const next=await call("listReviewQueue",{cursor});
+   if(!stillHere())return;
+   const seen=new Set(entries.map(item=>item.entryId));
+   entries.push(...next.entries.filter(item=>!seen.has(item.entryId)));
+   cursor=next.nextCursor;
+   pages++;
+  }
+  while(cursor&&pages<queuePages&&stillHere())await nextPage();
+  if(!stillHere())return;
+  const queue=workspaceCard("Selection queue");
+  const stageTabs=el("div",undefined,"committee-stages");
+  stageTabs.setAttribute("role","group");
+  stageTabs.setAttribute("aria-label","Selection stage");
+  const stages=[["all","All entries"],...selectionStages.map(stage=>[stage,statusText(stage)]),["closed","Closed files"]];
+  const matchesStage=(item,stage)=>stage==="all"||item.status===stage||
+   (stage==="closed"&&selectionFilesClosed(item.status)&&item.status!=="selected");
+  const buttons=new Map();
+  for(const [value,label] of stages){
+   const button=el("button",undefined,"committee-stage");button.type="button";
+   const count=el("strong");
+   button.append(el("span",label),count);
+   button.onclick=()=>{queueStage=value;render();};
+   stageTabs.append(button);buttons.set(value,{button,count});
+  }
+  if(!result.personalReviewQueue)queueWork="all";
+  const filters=el("div",undefined,"field-grid queue-filters");
+  const searchField=el("label","Find an entry");
+  const search=el("input");search.type="search";search.placeholder="Student name, school or entry ID";search.value=queueSearch;
+  searchField.append(search);filters.append(searchField);
+  const typeField=el("label","Entry type");
+  const type=el("select");
+  const workField=el("label","Review and follow-up");
+  const work=el("select");
+  for(const [control,options] of [[type,[["all","All entry types"],["self","Applications"],["nomination","Nominations"]]],
+   [work,[["all","All review activity"],["needs_review","Needs my evaluation"],["reviewed","I’ve evaluated"],["follow_up","Requirements pending"]]]]){
+   for(const [value,label] of options){
+    const option=el("option",label);option.value=value;control.append(option);
+   }
+  }
+  type.value=queueType;typeField.append(type);filters.append(typeField);
+  work.value=queueWork;workField.append(work);if(result.personalReviewQueue)filters.append(workField);
   const list=el("div",undefined,"selection-results");
   const count=el("p",undefined,"help");count.setAttribute("role","status");
   const load=el("button","Load more entries","btn btn-outline");load.type="button";
-  let cursor=result.nextCursor;
+  const refresh=el("button","Refresh queue","btn btn-outline");refresh.type="button";
+  refresh.onclick=()=>showCommittee();
   const render=()=>{
    const term=queueSearch.trim().toLowerCase();
-   const filtered=entries.filter(item=>(queueStage==="all"||item.status===queueStage||
-     (queueStage==="closed"&&selectionFilesClosed(item.status)&&item.status!=="selected"))&&
-    (item.studentName.toLowerCase().includes(term)||item.entryId.toLowerCase().includes(term)));
+   const matching=entries.filter(item=>(queueType==="all"||item.type===queueType)&&
+    (queueWork==="all"||(queueWork==="needs_review"&&!selectionFilesClosed(item.status)&&!item.myReviewSaved)||
+     (queueWork==="reviewed"&&item.myReviewSaved)||(queueWork==="follow_up"&&!selectionFilesClosed(item.status)&&item.requirementsPending>0))&&
+    [item.studentName,item.entryId,item.school||""].some(value=>value.toLowerCase().includes(term)));
+   const filtered=matching.filter(item=>matchesStage(item,queueStage));
+   for(const [value,{button,count:total}] of buttons){
+    button.setAttribute("aria-pressed",String(queueStage===value));
+    total.textContent=String(matching.filter(item=>matchesStage(item,value)).length);
+   }
    count.textContent=filtered.length+" shown · "+entries.length+" loaded";
    list.replaceChildren();
    if(!filtered.length)list.append(el("p",cursor?"No matches in the loaded entries. Load more to continue.":"No entries match this view.","muted"));
-   for(const item of filtered)list.append(entryRow(item,"Open selection file",()=>openReview(item.entryId)));
+   for(const item of filtered){
+    const row=entryRow(item,"Open selection file",()=>openReview(item.entryId),item.school);
+    if(result.personalReviewQueue){
+     const notes=[item.myReviewSaved?"Evaluation saved":!selectionFilesClosed(item.status)?"Your evaluation pending":""];
+     if(!selectionFilesClosed(item.status)&&item.requirementsPending)
+      notes.push(item.requirementsPending+" program requirement"+(item.requirementsPending===1?"":"s")+" pending");
+     if(notes.some(Boolean))row.firstElementChild.append(el("p",notes.filter(Boolean).join(" · "),"committee-row-detail"));
+    }
+    list.append(row);
+   }
    load.hidden=!cursor;
   };
-  filter.onchange=()=>{queueStage=filter.value;render();};
   search.oninput=()=>{queueSearch=search.value;render();};
+  type.onchange=()=>{queueType=type.value;render();};
+  work.onchange=()=>{queueWork=work.value;render();};
   load.onclick=async()=>{
    load.disabled=true;
-   try{
-    const next=await call("listReviewQueue",{cursor});
-    if(!stillHere())return;
-    const seen=new Set(entries.map(item=>item.entryId));
-    entries.push(...next.entries.filter(item=>!seen.has(item.entryId)));
-    cursor=next.nextCursor;render();
-   }catch(e){notify(readable(e));}
+   try{await nextPage();if(stillHere()){queuePages=pages;render();}}
+   catch(e){notify(readable(e));}
    finally{load.disabled=false;}
   };
-  queue.append(filters,count,list,load);box.append(queue);render();
+  const actions=el("div",undefined,"workspace-actions");actions.append(load,refresh);
+  queue.append(stageTabs,filters,count,list,actions);box.append(queue);render();
+  if(focusQueue){const heading=qs("h2",queue);heading.tabIndex=-1;heading.focus({preventScroll:true});}
  }catch(e){
   if(stillHere())box.replaceChildren(workspaceCard("Committee access",readable(e)));
  }
@@ -991,6 +1046,24 @@ function reviewField(label,placeholder,rows,maxLength,value=""){
  const input=el("textarea");input.rows=rows;input.maxLength=maxLength;input.placeholder=placeholder;input.value=value;
  field.append(input);
  return {field,input};
+}
+const requirementLabels={
+ follow_up:"Student nomination follow-up",
+ eligibility:"Verified eligibility",
+ references:"Two verified references",
+ consent:"Verified guardian consent"
+};
+function recommendationText(value){
+ return {select:"Recommend selection",decline:"Do not recommend",discuss:"Discuss further"}[value]||"Pending";
+}
+function pendingRequirements(entry){
+ if(Array.isArray(entry.requirements))return entry.requirements;
+ return [
+  entry.nominationFollowUpNeeded?"follow_up":null,
+  entry.verifiedEligibility?null:"eligibility",
+  entry.referenceCount>=2?null:"references",
+  entry.ageBand==="adult"||entry.guardianStatus==="verified"?null:"consent"
+ ].filter(Boolean);
 }
 function renderSelectionStages(entry){
  const panel=workspaceCard("Selection stages");
@@ -1031,17 +1104,11 @@ function renderSelectionStages(entry){
  }else if(index>=0){
   if(index>0)moveButton("Move back to "+statusText(selectionStages[index-1]),selectionStages[index-1],"btn-outline");
   if(entry.status==="submitted")moveButton("Start eligibility screening","screening","btn-gold");
-  if(entry.status==="screening")panel.append(el("p","Verify eligibility below to advance to committee review.","help"));
+  if(entry.status==="screening")panel.append(el("p","Open Eligibility & decision to verify eligibility and advance to committee review.","help"));
   if(entry.status==="under_review"){
-   const remaining=[];
-   if(entry.nominationFollowUpNeeded)remaining.push("Student nomination follow-up");
-   if(!entry.verifiedEligibility)remaining.push("Eligibility verification");
-   if(entry.referenceCount<2)remaining.push("Two verified references");
-   if(entry.ageBand!=="adult"&&entry.guardianStatus!=="verified")remaining.push("Verified guardian consent");
+   const remaining=pendingRequirements(entry);
    if(remaining.length){
-    const list=el("ul",undefined,"stage-requirements");
-    for(const requirement of remaining)list.append(el("li",requirement));
-    panel.append(el("p","Complete these steps before advancing to Finalist."),list);
+    panel.append(el("p","Complete the outstanding items in the readiness checklist before advancing to Finalist.","help"));
    }else moveButton("Advance to Finalist","finalist","btn-gold",undefined,
     "Advance "+entry.studentName+" to Finalist? The student can see this status in their dashboard.");
   }
@@ -1051,12 +1118,12 @@ function renderSelectionStages(entry){
 }
 
 let reviewRequest=0;
-async function openReview(entryId){
+async function openReview(entryId,section="overview"){
  const container=$("review-detail"),queue=$("committee-content");
  const request=++reviewRequest,uid=currentUser?.uid;
  queue.hidden=true;container.hidden=false;
  const back=el("button","← Selection queue","link-button workspace-back");back.type="button";
- back.onclick=()=>{showCommittee();$("committee-view").scrollIntoView({block:"start"});};
+ back.onclick=()=>{showCommittee(true);$("committee-view").scrollIntoView({block:"start"});};
  container.replaceChildren(back,el("p","Loading selection file…","muted"));
  try{
   const result=await call("getReviewEntry",{entryId}),d=result.entry;
@@ -1066,14 +1133,37 @@ async function openReview(entryId){
   const summary=el("div",undefined,"workspace-card-heading");
   summary.append(el("p",entryType(d)+(d.grade?" · Grade "+d.grade:""),"muted"),statusBadge(d.status));
   core.append(summary);
+  const files=el("div",undefined,"committee-file");
+  files.id="committee-file";
+  files.dataset.entryId=entryId;
   const letters=committeeLetterActions(d);
   if(letters)core.append(letters);
+  const reviewSummary=d.reviewCount+" recorded"+(Number.isInteger(d.approveVotes)?" · "+d.approveVotes+" recommend selection":"");
   core.append(workspaceFacts([
-   ["School",d.school||"—"],["Reported GPA",d.gpa??"Not reported"],["Eligibility",d.verifiedEligibility?"Verified":"Pending"],
-   ["References",d.referenceCount+" of 2 verified"],["Guardian consent",statusText(d.guardianStatus)],
-   ["Committee reviews",d.reviewCount+" recorded · "+d.approveVotes+" recommend selection"],["Entry ID",d.entryId]
+   ["School",d.school||"—"],["Reported GPA",d.gpa??"Not reported"],["Committee reviews",reviewSummary],["Entry ID",d.entryId]
   ]));
   if(d.decisionMethod)core.append(infoRow("Decision method",d.decisionMethod==="founder"?"Founder review":"Committee review"));
+  const overview=el("div",undefined,"workspace-stack");
+  overview.id="review-overview";
+  const closed=selectionFilesClosed(d.status);
+  if(d.selectionStages)overview.append(renderSelectionStages(d));
+  if(!closed){
+   const readiness=workspaceCard("Readiness checklist");
+   const list=el("ul",undefined,"committee-checklist");
+   const missing=pendingRequirements(d);
+   for(const [code,label] of Object.entries(requirementLabels)){
+    if(code==="follow_up"&&!missing.includes(code)&&!d.nominationLetter?.followUpRequested)continue;
+    const item=el("li");
+    const incomplete=missing.includes(code);
+    item.append(el("strong",label),el("span",incomplete?"Pending":code==="consent"&&d.ageBand==="adult"?"Not required":"Complete",
+     incomplete?"check-pending":"check-complete"));
+    list.append(item);
+   }
+   readiness.append(list);
+   overview.append(readiness);
+  }
+  const storyCard=workspaceCard("Student story");
+  storyCard.id="review-story";
   const story=el("div",undefined,"review-story");
   for(const [key,label] of [["personalStatement","Essay or nomination"],["academicInterests","Academic interests"],["futureGoals","Future goals"],["service","Community service"],["activities","Leadership and activities"],["responsibilities","Responsibilities and personal growth"],["additionalInfo","Additional context"]]){
    if(d[key])story.append(el("h3",label),el("p",d[key]));
@@ -1082,49 +1172,63 @@ async function openReview(entryId){
    core.append(el("p",d.nominationLetter.formsQueued
     ?"Student follow-up received. Outstanding form emails were queued."
     :"Student follow-up received. Use References and consent to issue any outstanding forms.","callout"));
-  if(story.childElementCount)core.append(story);
+  if(story.childElementCount)storyCard.append(story);
+  else storyCard.append(el("p","No statement is on file.","help"));
   if(d.duplicateCount>1){core.append(el("p","Potential duplicate entries: "+d.duplicateCount+" records share the same student name, school and graduation year. Review without assuming they are duplicates.","callout"));}
   if((d.endorsements||[]).length){
-   core.append(el("h3","Supporting nominations ("+d.endorsements.length+")"));
+   storyCard.append(el("h3","Supporting nominations ("+d.endorsements.length+")"));
    for(const endorsement of d.endorsements){
-    core.append(el("p",endorsement.statement));
-    if(endorsement.nominator?.name)core.append(el("p","Confidential nominator (admin): "+endorsement.nominator.name,"help"));
+    storyCard.append(el("p",endorsement.statement));
+    if(endorsement.nominator?.name)storyCard.append(el("p","Confidential nominator (admin): "+endorsement.nominator.name,"help"));
    }
   }
   if(d.nominator){core.append(el("h3","Confidential nominator identity — ADMIN ONLY"));core.append(infoRow("Name",d.nominator.name));core.append(infoRow("Email",d.nominator.email));}
-  container.append(core);
-  if(d.selectionStages)container.append(renderSelectionStages(d));
-  const closed=selectionFilesClosed(d.status);
+  container.append(core,files);
   const refs=workspaceCard("References and consent");
   refs.id="review-references";
-  if(!d.references?.length)refs.append(el("p","No reference responses have been recorded yet.","muted"));
+  refs.append(infoRow("Guardian consent",statusText(d.guardianStatus)));
   const referenceLabels=["Academic reference","Character reference"];
-  (d.referenceSuggestions||[]).forEach((r,i)=>{
-   if(r.name||r.email)refs.append(infoRow(referenceLabels[i], [r.name,r.email].filter(Boolean).join(" • ")));
-  });
-  for(const r of d.references||[]){
-   refs.append(el("h3",referenceLabels[r.slot]+" — "+(r.verified?"Verified":"Awaiting verification")));
-   if(r.fullName)refs.append(infoRow("Full name",r.fullName));
-   for(let i=0;i<(r.answers||[]).length;i++){refs.append(el("p",prompts[i],"help"));refs.append(el("p",r.answers[i]));}
-   if(!d.canManage||closed)continue;
-   if(!r.verified){
-    const button=el("button","Confirm reference identity and verify","btn btn-outline");
-    button.type="button";button.onclick=()=>action("verifyRequirement",{entryId,kind:"reference",slot:Number(r.slot)},entryId);refs.append(button);
-   }else{
-    const {field,input:reason}=reviewField("Reason for invalidation","Explain why this reference is being invalidated",2,600);
-    refs.append(field);
-    const revoke=el("button","Invalidate reference "+(Number(r.slot)+1),"btn btn-outline");
-    revoke.type="button";revoke.onclick=()=>action("invalidateReference",{entryId,slot:Number(r.slot),reason:reason.value},entryId);refs.append(revoke);
+  for(const [slot,label] of referenceLabels.entries()){
+   const response=(d.references||[]).find(item=>Number(item.slot??item.id)===slot);
+   const contact=d.referenceSuggestions?.[slot];
+   const card=el("details",undefined,"workspace-subsection committee-reference");
+   const state=response?.verified?"Verified":response?"Response received":"Awaiting response";
+   card.append(el("summary",label+" · "+state));
+   if(contact?.name||contact?.email)card.append(infoRow("Contact",[contact.name,contact.email].filter(Boolean).join(" · ")));
+   if(response?.fullName)card.append(infoRow("Responded as",response.fullName));
+   for(const [i,answer] of (response?.answers||[]).entries())card.append(el("p",prompts[i],"help"),el("p",answer));
+   if(!response)card.append(el("p","No response is on file.","help"));
+   if(d.canManage&&!closed){
+    if(response?.verified){
+     const {field,input:reason}=reviewField("Reason for invalidation","Explain why this reference is being invalidated",2,600);
+     const revoke=el("button","Invalidate "+label.toLowerCase(),"btn btn-outline");
+     revoke.type="button";
+     revoke.onclick=()=>action("invalidateReference",{entryId,slot,reason:reason.value},entryId);
+     card.append(field,revoke);
+    }else{
+     const actions=el("div",undefined,"workspace-actions");
+     if(response){
+      const verify=el("button","Confirm reference identity and verify","btn btn-gold");
+      verify.type="button";
+      verify.onclick=()=>action("verifyRequirement",{entryId,kind:"reference",slot},entryId);
+      actions.append(verify);
+     }
+     if(contact?.email){
+      const invite=el("button",response?"Request a new response":"Invite "+label.toLowerCase(),"btn btn-outline");
+      invite.type="button";invite.onclick=()=>invitation(entryId,"reference",slot);actions.append(invite);
+     }else card.append(el("p","Add a reference email in Student details to send an invitation.","help"));
+     if(actions.childElementCount)card.append(actions);
+    }
    }
+   refs.append(card);
   }
-  container.append(refs);
+  files.append(refs);
   if(d.canManage&&!closed){
    const tools=el("div",undefined,"review-actions");
-   referenceLabels.forEach((label,slot)=>{
-    const btn=el("button","Invite "+label.toLowerCase(),"btn btn-outline");
-    btn.type="button";btn.onclick=()=>invitation(entryId,"reference",slot);tools.append(btn);
-   });
-   const guardian=el("button","Create guardian consent invitation","btn btn-outline");guardian.type="button";guardian.onclick=()=>invitation(entryId,"guardian",null);tools.append(guardian);
+   if(d.ageBand!=="adult"&&d.guardianStatus!=="verified"&&d.guardianEmail){
+    const guardian=el("button","Create guardian consent invitation","btn btn-outline");
+    guardian.type="button";guardian.onclick=()=>invitation(entryId,"guardian",null);tools.append(guardian);
+   }
    if(d.guardianStatus==="signed_pending_verification"){const verify=el("button","Verify guardian authorization","btn btn-outline");verify.type="button";verify.onclick=()=>action("verifyRequirement",{entryId,kind:"guardian"},entryId);tools.append(verify);}
    if(d.guardianStatus==="verified"||d.guardianStatus==="signed_pending_verification"){
     const {field,input:reason}=reviewField("Reason for consent withdrawal","Describe the guardian’s request",2,600);
@@ -1132,7 +1236,7 @@ async function openReview(entryId){
     const revoke=el("button","Record guardian consent withdrawal","btn btn-outline");revoke.type="button";
     revoke.onclick=()=>action("revokeGuardianConsent",{entryId,reason:reason.value},entryId);tools.append(revoke);
    }
-   refs.append(tools);
+   if(tools.childElementCount)refs.append(tools);
    const manage=workspaceCard("Student details and invitations");
    manage.id="review-student-details";
    manage.append(el("p","Use only confirmed information. Nominations can be submitted before the student's references or guardian contact information are available.","help"));
@@ -1173,21 +1277,39 @@ async function openReview(entryId){
      invitations.append(btn);
     });
    }
-   manage.append(invitations);
-   container.append(manage);
+   if(invitations.childElementCount)manage.append(invitations);
+   files.append(manage);
   }
-  const founderReview=d.canManage&&d.reviewCount<3;
-  const control=workspaceCard("Independent evaluation",founderReview
+  const founderReview=(d.decisionReadiness?.method||(d.reviewCount<3?"founder":"committee"))==="founder";
+  const control=workspaceCard("Independent evaluation",d.canManage&&founderReview
    ?"Score each criterion and save your recommendation. You can then use Founder review to finalize the same decision."
    :"Score each criterion and record your recommendation.");
   control.id="review-evaluation";
   const reviewForm=el("form",undefined,"entry-form");reviewForm.innerHTML=
   '<div class="rubric-grid">'+[
    ["character","Character & integrity",30],["perseverance","Perseverance & growth",25],["service","Service & compassion",20],["leadership","Leadership & initiative",15],["potential","Purpose & potential",10]
-  ].map(([key,label,max])=>'<label>'+label+' / '+max+'<input type="number" name="'+key+'" min="0" max="'+max+'" required value="'+(d.myReview?.scores?.[key]??0)+'"></label>').join("")+
+  ].map(([key,label,max])=>'<label>'+label+' / '+max+'<input type="number" name="'+key+'" min="0" max="'+max+'" required value="'+(Number.isInteger(d.myReview?.scores?.[key])?d.myReview.scores[key]:"")+'"></label>').join("")+
   '</div><label>Committee recommendation <select name="recommend"><option value="discuss">Discuss further</option><option value="select">Recommend selection</option><option value="decline">Do not recommend</option></select></label><label>Independent reviewer notes <textarea name="notes" rows="5" maxlength="2400"></textarea></label><button type="submit" class="btn btn-gold">Save evaluation</button>';
   reviewForm.elements.recommend.value=d.myReview?.recommend||"discuss";
   reviewForm.elements.notes.value=d.myReview?.notes||"";
+  const draft=reviewDrafts.get(entryId);
+  if(draft)for(const [name,value] of draft)reviewForm.elements[name].value=value;
+  const scoreInputs=qsa('input[type="number"]',reviewForm);
+  const savedLabel=d.myReview?.submittedAt?"Saved "+timestamp(d.myReview.submittedAt):"Evaluation saved";
+  const evaluationStatus=el("p",draft?"Unsaved changes":d.myReview
+   ?savedLabel+" · "+recommendationText(d.myReview.recommend):"No evaluation saved yet.","help");
+  const total=el("output",undefined,"evaluation-total");
+  function updateTotal(){
+   total.textContent=scoreInputs.every(input=>input.value!==""&&input.validity.valid)
+    ?"Total "+scoreInputs.reduce((sum,input)=>sum+input.valueAsNumber,0)+" / 100"
+    :"Enter a score for each criterion to calculate the total.";
+  }
+  updateTotal();
+  reviewForm.prepend(evaluationStatus,total);
+  reviewForm.addEventListener("input",()=>{
+   reviewDrafts.set(entryId,[...new FormData(reviewForm)]);
+   updateTotal();evaluationStatus.textContent="Unsaved changes";
+  });
   reviewForm.addEventListener("submit",async e=>{
    e.preventDefault();const f=new FormData(e.currentTarget),scores={};
    for(const key of ["character","perseverance","service","leadership","potential"])scores[key]=Number(f.get(key));
@@ -1197,15 +1319,20 @@ async function openReview(entryId){
   const recusal=el("details",undefined,"workspace-subsection");
   const {field:conflictField,input:conflict}=reviewField("Reason for recusal","Describe the conflict of interest",2,400);
   const recuse=el("button","Recuse myself from this entry","btn btn-outline");
-  recuse.type="button";recuse.onclick=()=>action("recuse",{entryId,reason:conflict.value},entryId);
+  recuse.type="button";recuse.onclick=()=>{
+   if(conflict.value.trim().length<5){notify("Provide a brief reason for recusal.");return;}
+   if(confirm("Recuse yourself from this entry? It will leave your queue and your saved evaluation will be removed."))
+    action("recuse",{entryId,reason:conflict.value},entryId);
+  };
   recusal.append(el("summary","Conflict of interest"),conflictField,recuse);
   control.append(recusal);
-  if(!closed)container.append(control);
+  if(!closed)files.append(control);
   else if(d.myReview){
    const prior=workspaceCard("Your recorded evaluation");
-   prior.append(workspaceFacts([["Score",d.myReview.total+" / 100"],["Recommendation",d.myReview.recommend]]));
+   prior.id="review-evaluation";
+   prior.append(workspaceFacts([["Score",d.myReview.total+" / 100"],["Recommendation",recommendationText(d.myReview.recommend)]]));
    if(d.myReview.notes)prior.append(el("p",d.myReview.notes));
-   container.append(prior);
+   files.append(prior);
   }
   if(d.canManage&&!closed){
    const adminTools=el("div",undefined,"workspace-columns");
@@ -1226,44 +1353,57 @@ async function openReview(entryId){
    const decisionCard=workspaceCard("Final decision",founderReview
     ?"Founder review is available while fewer than three evaluations are on file. Your saved recommendation must match the decision."
     :"Committee review requires three to five evaluations and two favorable recommendations for selection.");
-   if(founderReview&&d.myReview?.recommend!=="select"&&d.myReview?.recommend!=="decline")
-    decisionCard.append(el("p","Save an evaluation that recommends selection or non-selection to continue.","help"));
    const {field:founderField,input:founder}=reviewField("Founder’s note (optional)","Write a message for the recognition letter",3,3400,d.founderNote||"");
-   const decisions=el("div",undefined,"workspace-actions");
-   if(d.selectionStages&&d.status!=="finalist")
-    decisionCard.append(el("p","Advance the student to Finalist before selecting them as a Scholar.","help"));
+   decisionCard.append(founderField);
    for(const [label,decision] of [["Approve Beacon Scholar","select"],["Finalize as not selected","decline"]]){
+    const outcome=el("div",undefined,"committee-outcome");
+    const reasons=d.decisionReadiness?.[decision]||[
+     !d.verifiedEligibility?"Verify eligibility first.":null,
+     decision==="select"&&d.selectionStages&&d.status!=="finalist"?"Advance this student to Finalist.":null,
+     founderReview&&d.myReview?.recommend!==decision?"Save an evaluation with a matching recommendation.":null
+    ].filter(Boolean);
+    if(reasons.length){
+     const list=el("ul",undefined,"help");
+     for(const reason of reasons)list.append(el("li",reason));
+     outcome.append(el("h3",decision==="select"?"Before selecting a Scholar":"Before closing as not selected"),list);
+    }
     const button=el("button",label,decision==="select"?"btn btn-gold":"btn btn-outline");
-    button.type="button";
-    button.disabled=!d.verifiedEligibility||(founderReview&&d.myReview?.recommend!==decision)||
-     (decision==="select"&&d.selectionStages&&d.status!=="finalist");
+    button.type="button";button.disabled=reasons.length>0;
     button.onclick=async()=>{
      const method=founderReview?"Founder review":"Committee review";
      if(confirm("Finalize this decision for "+d.studentName+" through "+method+"? This records the decision in the student’s dashboard."))
       await action("finalizeDecision",{entryId,fromStatus:d.status,decision,founderNote:founder.value,reviewMethod:founderReview?"founder":"committee"},entryId);
     };
-    decisions.append(button);
+    outcome.append(button);decisionCard.append(outcome);
    }
-   decisionCard.append(founderField,decisions);
    adminTools.append(eligibility,decisionCard);
-   container.append(adminTools);
+   files.append(adminTools);
   }
-  const shortcuts=el("nav",undefined,"review-shortcuts");
-  shortcuts.setAttribute("aria-label","Selection file sections");
-  for(const [label,id] of [["Stages","review-stages"],["References","review-references"],["Student details","review-student-details"],["Evaluation","review-evaluation"],["Eligibility and decision","review-admin-actions"]]){
-   const target=$(id);
-   if(!target?.isConnected)continue;
-   const button=el("button",label,"link-button");button.type="button";
-   button.onclick=()=>{
-    const heading=qs("h2",target);
-    heading.tabIndex=-1;heading.focus({preventScroll:true});
-    target.scrollIntoView({behavior:"smooth",block:"start"});
-   };
-   shortcuts.append(button);
+  files.prepend(overview,storyCard);
+  const tabs=el("div",undefined,"review-shortcuts committee-file-tabs");
+  tabs.setAttribute("aria-label","Selection file sections");tabs.setAttribute("role","group");
+  const sections=[["overview","Overview",overview],["story","Student story",storyCard],["references","References & consent",refs],
+   ["details","Student details",$("review-student-details")],["evaluation","Evaluation",$("review-evaluation")],
+   ["decision","Eligibility & decision",$("review-admin-actions")]].filter(([, ,panel])=>panel);
+  section=sections.some(([key])=>key===section)?section:"overview";
+  const tabButtons=[];
+  function selectSection(active){
+   files.dataset.section=active;
+   for(const {key,button,panel} of tabButtons){
+    const selected=key===active;
+    button.setAttribute("aria-pressed",String(selected));panel.hidden=!selected;
+   }
   }
-  summary.after(shortcuts);
-  back.focus({preventScroll:true});
-  container.scrollIntoView({behavior:"smooth",block:"start"});
+  for(const [key,label,panel] of sections){
+   const button=el("button",label,"committee-file-tab");button.type="button";
+   button.setAttribute("aria-controls",panel.id);
+   button.onclick=()=>selectSection(key);
+   tabs.append(button);tabButtons.push({key,button,panel});
+  }
+  files.prepend(tabs);
+  selectSection(section);
+  tabButtons.find(tab=>tab.key===section)?.button.focus({preventScroll:true});
+  container.scrollIntoView({behavior:"instant",block:"start"});
  }catch(e){
   if(request===reviewRequest&&currentUser?.uid===uid)container.replaceChildren(back,workspaceCard("Selection file",readable(e)));
  }
@@ -1271,20 +1411,28 @@ async function openReview(entryId){
 }
 async function action(name,payload,entryId){
  const request=reviewRequest;
+ const section=$("committee-file")?.dataset.section;
  const button=document.activeElement;
  if(button instanceof HTMLButtonElement)button.disabled=true;
  try{
   const result=await call(name,payload);
   if(request!==reviewRequest||location.hash!=="#committee")return;
+  if(name==="recordReview"||name==="recuse")reviewDrafts.delete(entryId);
   notify(result.publicId?"Scholar recognition created: "+result.publicId:
    result.status?"Moved to "+statusText(result.status)+".":"Changes saved.");
-  await openReview(entryId);
+  if(name==="recuse"){notify("Recusal recorded. The file was removed from your queue.");await showCommittee();return;}
+  const nextSection=name==="setEligibility"&&payload.fromStatus==="screening"?"overview":section;
+  await openReview(entryId,nextSection);
  }catch(e){if(request===reviewRequest)notify(readable(e));}
  finally{if(button instanceof HTMLButtonElement)button.disabled=false;}
 }
 async function invitation(entryId,kind,slot){
+ const request=reviewRequest;
+ const button=document.activeElement;
+ if(button instanceof HTMLButtonElement)button.disabled=true;
  try{
   const result=await call("createInvitation",{entryId,kind,slot});
+  if(request!==reviewRequest||location.hash!=="#committee")return;
   let panel=$("private-invite-link");if(panel)panel.remove();
   panel=el("div",undefined,"review-card");panel.id="private-invite-link";
   panel.append(el("h3","Private invitation for "+result.recipientEmail));
@@ -1295,7 +1443,8 @@ async function invitation(entryId,kind,slot){
   button.onclick=async()=>{try{await navigator.clipboard.writeText(result.url);notify("Private link copied.");}catch{input.select();notify("Select and copy the link above.");}};
   panel.append(button);$("review-detail").prepend(panel);
   panel.scrollIntoView({behavior:"smooth",block:"start"});
- }catch(e){notify(readable(e));}
+ }catch(e){if(request===reviewRequest)notify(readable(e));}
+ finally{if(button instanceof HTMLButtonElement)button.disabled=false;}
 }
 
 async function checkScholarId(id){
