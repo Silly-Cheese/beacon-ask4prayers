@@ -270,7 +270,7 @@
   </details>
   <details>
     <summary>Can I nominate someone privately?</summary>
-    <p>Yes. A named nomination allows Beacon to share your name with the student. With a confidential nomination, Beacon administrators keep your name private. You can also submit anonymously without signing in.</p>
+    <p>Yes. A named nomination allows Beacon to share your name with the student. With a confidential nomination, Beacon administrators keep your name private. You can also submit anonymously without signing in. Give Beacon a student or guardian email you have permission to share so the letter can reach the student.</p>
   </details>
   <details>
     <summary>Who should I ask to be a reference?</summary>
@@ -346,10 +346,23 @@
  <div id="nomination-intake-gate" class="callout" role="status">Checking nomination availability…</div>
  <div id="nomination-receipt" class="account-card entry-receipt" hidden></div>
  <div class="form-layout" id="nomination-layout" hidden><form id="nomination-form" class="entry-form" novalidate>
-  <div class="form-section"><h2>How would you like to submit?</h2><div class="privacy-options"><label><input type="radio" name="privacy" value="confidential" checked><span><strong>Confidential</strong><small>Sign in. Beacon administrators keep your name private.</small></span></label><label><input type="radio" name="privacy" value="named"><span><strong>Named</strong><small>Sign in. Beacon may share your name with the student.</small></span></label><label><input type="radio" name="privacy" value="anonymous"><span><strong>Fully anonymous</strong><small>Skip sign-in. Beacon will follow up separately for references.</small></span></label></div><div id="nominator-identity"><p class="help">Use a verified Beacon account for a named or confidential nomination.</p><p id="nomination-account-status" class="help" hidden></p><div class="field-grid"><label>Your full name <input name="nominatorName" maxlength="120"></label></div><label>How do you know the student? <input name="relationship" maxlength="100"></label><a class="text-link" id="nomination-sign-in" href="#account/nominate">Sign in / create account →</a></div></div>
+  <div class="form-section"><h2>How would you like to submit?</h2><div class="privacy-options"><label><input type="radio" name="privacy" value="confidential" checked><span><strong>Confidential</strong><small>Sign in. Beacon administrators keep your name private.</small></span></label><label><input type="radio" name="privacy" value="named"><span><strong>Named</strong><small>Sign in. Beacon may share your name with the student.</small></span></label><label><input type="radio" name="privacy" value="anonymous"><span><strong>Fully anonymous</strong><small>Skip sign-in. A student or guardian email is required for letter delivery.</small></span></label></div><div id="nominator-identity"><p class="help">Use a verified Beacon account for a named or confidential nomination.</p><p id="nomination-account-status" class="help" hidden></p><div class="field-grid"><label>Your full name <input name="nominatorName" maxlength="120"></label></div><label>How do you know the student? <input name="relationship" maxlength="100"></label><a class="text-link" id="nomination-sign-in" href="#account/nominate">Sign in / create account →</a></div></div>
   <div class="form-section"><h2>About the student</h2><div class="field-grid"><label>Student's full name <input name="studentName" maxlength="120" required></label><label>School / learning program <input name="school" required maxlength="160"></label><label>Grade <select name="grade" required><option value="">Select</option><option value="9">9</option><option value="10">10</option><option value="11">11</option><option value="12">12</option></select></label><label>Expected graduation year <input name="graduationYear" type="number" min="2026" max="2040" required></label></div></div>
   <div class="form-section"><h2>Why are you nominating them?</h2><label>Share a specific example <textarea name="personalStatement" maxlength="6000" minlength="180" required rows="10" placeholder="Describe what the student did and what it showed about their character."></textarea></label></div>
-  <details class="form-section intake-details"><summary>Add optional contact information</summary><p class="help">Share only contact details you have permission to provide. Beacon can follow up about references and guardian consent later.</p><label>State (optional) <input name="state" maxlength="80"></label><label>Parent/guardian email (if known and you have permission to share) <input name="guardianEmail" type="email"></label><label>Student email (if known and you have permission to share) <input name="applicantEmail" type="email"></label><div class="field-grid"><label>Academic reference name (if known) <input name="ref1Name"></label><label>Academic reference email <input name="ref1Email" type="email"></label><label>Character reference name (if known) <input name="ref2Name"></label><label>Character reference email <input name="ref2Email" type="email"></label></div><label>Private message for the student (optional) <textarea name="message" maxlength="1800" rows="4"></textarea></label></details>
+  <div class="form-section">
+   <h2>Where should we send the nomination letter?</h2>
+   <p class="help" id="nomination-delivery-help">If you have permission to share the student’s or guardian’s email, enter it here so Beacon can send the letter and private Entry Key. One email is enough.</p>
+   <div class="field-grid">
+    <label>Student email <input name="applicantEmail" type="email" maxlength="254" aria-describedby="nomination-delivery-help"></label>
+    <label>Parent or guardian email <input name="guardianEmail" type="email" maxlength="254" aria-describedby="nomination-delivery-help"></label>
+   </div>
+   <div id="nomination-handoff">
+    <p class="help">If you don’t have either address, you can arrange to pass along the letter privately. The Beacon team can arrange delivery with you at the email on your verified account.</p>
+    <label class="check-label"><input type="checkbox" name="nominationHandoff"> I can deliver the letter to the student or their parent or guardian.</label>
+   </div>
+   <p class="intake-error" id="nomination-delivery-error" role="alert" hidden></p>
+  </div>
+  <details class="form-section intake-details"><summary>Add optional nomination details</summary><p class="help">Share only information you have permission to provide. References can be added later.</p><label>State (optional) <input name="state" maxlength="80"></label><div class="field-grid"><label>Academic reference name (if known) <input name="ref1Name"></label><label>Academic reference email <input name="ref1Email" type="email"></label><label>Character reference name (if known) <input name="ref2Name"></label><label>Character reference email <input name="ref2Email" type="email"></label></div><label>Private message for the student (optional) <textarea name="message" maxlength="1800" rows="4"></textarea></label></details>
   <label class="check-label"><input type="checkbox" name="declaration" required> I confirm this nomination is truthful, respectful, and submitted to honor the student. Submission does not guarantee selection.</label>
   <p class="intake-error" id="nomination-form-error" role="alert" hidden></p>
   <button class="btn btn-gold" id="nom-submit" type="submit">Submit nomination</button>
@@ -411,6 +424,6 @@
 </main>
 <footer class="site-footer"><div class="wrap footer-inner"><div><a class="brand" href="#home"><span class="brand-icon">✦</span><span class="brand-words"><strong>BEACON</strong><small>SCHOLARS</small></span></a><small>An initiative of <a href="https://ask4prayers.com/">The Prayer Project</a></small></div><div class="footer-links"><a href="#mission">About</a><a href="#selection">Selection</a><a href="#recognition">Recognition</a><a href="#faq">FAQ</a><a href="#verify">Verify a Scholar ID</a><a href="#apply">Apply</a><a href="#nominate">Nominate</a><a href="#policy">Privacy notice</a><a href="#committee">Committee</a></div></div><div class="wrap footer-bottom">© <span id="year"></span> The Prayer Project. Beacon Scholars is a recognition initiative.</div></footer>
 <div id="print-document" hidden></div>
-<script type="module" src="app.js?v=committee-csv-import-20261117"></script>
+<script type="module" src="app.js?v=nomination-delivery-20261117"></script>
 </body>
 </html>

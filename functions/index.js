@@ -44,6 +44,14 @@ const y=v=>{const n=Number(v);return Number.isInteger(n)&&n>=2026&&n<=2040?n:nul
 const bool=v=>v===true;
 const dedupe=o=>hash([o.studentName,o.school,o.graduationYear].map(x=>String(x).toLowerCase().trim().replace(/\s+/g,"")).join("|"));
 const entryClosed=status=>["selected","not_selected","merged","withdrawn"].includes(status);
+const canReachNominator=entry=>entry.privacy!=="anonymous"&&!!entry.nominator?.email;
+function nominationDelivery(entry){
+ if(entry.type!=="nomination"||entryClosed(entry.status))return null;
+ if(entry.applicantEmail)return "student_email";
+ if(entry.guardianEmail)return "guardian_email";
+ if(canReachNominator(entry))return entry.nominationHandoff===true?"nominator_handoff":"ask_nominator";
+ return "missing";
+}
 const entryKeyHash=token=>hash("beacon-entry:"+token);
 const keyRef=token=>db.collection("nominationKeys").doc(entryKeyHash(token));
 function references(v,draft=false) {
@@ -224,6 +232,7 @@ exports.submitEntry=onCall(opts,async r=>{
   if(!r.auth.token.email_verified||!nominator.name||nominator.email!==r.auth.token.email?.toLowerCase())
    throw new HttpsError("failed-precondition","Named and confidential nominators must sign in with their verified matching email.");
  }
+ const nominationHandoff=bool(r.data?.nominationHandoff)&&canReachNominator({privacy,nominator});
  const requestId=str(r.data?.requestId,100);
  if(requestId&&!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(requestId))err("Invalid nomination receipt key.");
  // A random receipt key is independent of the student's or nominator's identity.
@@ -239,6 +248,9 @@ exports.submitEntry=onCall(opts,async r=>{
    if(prior.exists)return prior.get("entryId");
   }
   await requireOpenIntake(tx);
+  if(!d.applicantEmail&&!d.guardianEmail&&!nominationHandoff)
+   err(privacy==="anonymous"?"Provide a student or guardian email so Beacon can deliver the nomination letter."
+    :"Provide a student or guardian email, or confirm you can deliver the letter privately.");
   if(quota){
    const q=await tx.get(quota),count=Number(q.data()?.count||0);
    if(count>=2)throw new HttpsError("resource-exhausted","This account has submitted two nominations today. You can submit another after midnight UTC.");
@@ -246,7 +258,7 @@ exports.submitEntry=onCall(opts,async r=>{
   }
   if(receipt)tx.create(receipt,{entryId:doc.id,createdAt:stamp()});
   tx.create(doc,{
-   ...d,personalStatement:d.personalStatement,type:"nomination",privacy,nominator,
+   ...d,personalStatement:d.personalStatement,type:"nomination",privacy,nominator,nominationHandoff,
    cycle,status:"submitted",entryId:doc.id,
    submitterUid:privacy==="anonymous"?null:r.auth.uid,applicantUid:null,
    submittedAt:stamp(),createdAt:stamp(),lastUpdatedAt:stamp(),publicId:null,
@@ -399,7 +411,8 @@ exports.listReviewQueue=onCall(opts,async r=>{
   if(recusedIds.has(doc.id))return [];
   const entry=doc.data();
   return [{...safeSummary(entry,doc.id),school:entry.school||"",myReviewSaved:reviewedIds.has(doc.id),
-   requirementsPending:selectionRequirements(entry).length}];
+   requirementsPending:selectionRequirements(entry).length,
+   ...(settings?{nominationDelivery:nominationDelivery(entry)}:{})}];
  });
  return {entries,nextCursor:q.size>80?page.at(-1).id:null,
   intake:settings?intakeSettings(settings):null,personalReviewQueue:true
@@ -469,7 +482,8 @@ exports.getReviewEntry=onCall(opts,async r=>{
    nominationLetter:isAdmin(r)?{
     keyIssued:!!d.entryKeyHash,needsEntryKey:d.type==="nomination"&&!d.applicantUid&&!entryClosed(d.status),
     followUpRequested:d.nominationFollowUp?.requestedAt?.toDate?.()?.toISOString?.()||null,
-    formsQueued:d.nominationFollowUp?.formsQueued===true
+    formsQueued:d.nominationFollowUp?.formsQueued===true,
+    delivery:nominationDelivery(d),nominatorHandoff:d.nominationHandoff===true
    }:null
  }};
 });
@@ -834,6 +848,11 @@ exports.updateEntryContacts=onCall(opts,async r=>{
  if("guardianEmail" in fields)changes.guardianEmail=mail(fields.guardianEmail);
  if("guardianName" in fields)changes.guardianName=str(fields.guardianName,120);
  if("applicantEmail" in fields)changes.applicantEmail=mail(fields.applicantEmail);
+ if("nominationHandoff" in fields){
+  if(original.type!=="nomination"||!canReachNominator(original)||typeof fields.nominationHandoff!=="boolean")
+   err("A nominator with an email on file is required to arrange letter delivery.");
+  changes.nominationHandoff=fields.nominationHandoff;
+ }
  if("ageBand" in fields){if(!["minor","adult",""].includes(fields.ageBand))err("Invalid age band.");changes.ageBand=fields.ageBand;}
  if("gpa" in fields){const n=fields.gpa===""?null:Number(fields.gpa);if(n!==null&&(!Number.isFinite(n)||n<0||n>4))err("GPA outside valid range.");changes.gpa=n;}
  if("references" in fields)changes.references=references(fields.references);

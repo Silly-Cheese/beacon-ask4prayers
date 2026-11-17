@@ -391,11 +391,18 @@ student.addEventListener("submit",async e=>{
 });
 
 const nomForm=$("nomination-form");
-nomForm.addEventListener("input",()=>{if(!nominationBusy)nominationRequestId=null;});
+const nominationDeliveryError=$("nomination-delivery-error");
+nomForm.addEventListener("input",()=>{
+ if(!nominationBusy)nominationRequestId=null;
+ nominationDeliveryError.hidden=true;
+});
 function nominationPrivacy(){
  const privacy=qs('input[name="privacy"]:checked',nomForm)?.value;
  const anonymous=privacy==="anonymous",signed=accountNeeded();
  $("nominator-identity").hidden=anonymous;
+ $("nomination-handoff").hidden=anonymous;
+ nomForm.elements.nominationHandoff.disabled=anonymous;
+ if(anonymous)nomForm.elements.nominationHandoff.checked=false;
  $("nomination-sign-in").hidden=signed;
  const status=$("nomination-account-status");
  status.hidden=!signed;
@@ -418,11 +425,19 @@ nomForm.addEventListener("submit",async e=>{
    input.reportValidity();return;
   }
  }
+ const d=new FormData(nomForm),get=x=>String(d.get(x)||"").trim();
+ const privacy=get("privacy"),nominationHandoff=get("nominationHandoff")==="on";
+ if(!get("applicantEmail")&&!get("guardianEmail")&&!nominationHandoff){
+  nominationDeliveryError.textContent=privacy==="anonymous"
+   ?"Enter the student’s or guardian’s email so we can deliver the letter."
+   :"Enter a student or guardian email, or confirm you can deliver the letter privately.";
+  nominationDeliveryError.hidden=false;
+  nomForm.elements.applicantEmail.focus();
+  return;
+ }
  nominationBusy=true;refreshGates();
  try{
   whenOpen();
-  const d=new FormData(nomForm),get=x=>String(d.get(x)||"").trim();
-  const privacy=get("privacy");
   let nominatorEmail="";
   if(privacy!=="anonymous"){
    if(!accountNeeded()){location.hash="#account/nominate";return;}
@@ -437,7 +452,7 @@ nomForm.addEventListener("submit",async e=>{
   nominationRequestId||=crypto.randomUUID();
   const out=await call("submitEntry",{
    type:"nomination",privacy,fields,requestId:nominationRequestId,declaration:get("declaration")==="on",nominatorName:get("nominatorName"),
-   nominatorEmail,relationship:get("relationship"),message:get("message")
+   nominatorEmail,nominationHandoff,relationship:get("relationship"),message:get("message")
   });
   nominationRequestId=null;
   nomForm.reset();nominationPrivacy();
@@ -1170,6 +1185,7 @@ function renderNominationCsvImport(){
  return outer;
 }
 
+const needsNominationDelivery=route=>route==="ask_nominator"||route==="missing";
 let queueStage="all",queueSearch="",queueType="all",queueWork="all",queuePages=1;
 const reviewDrafts=new Map();
 async function showCommittee(focusQueue=false){
@@ -1220,7 +1236,7 @@ async function showCommittee(focusQueue=false){
    button.onclick=()=>{queueStage=value;render();};
    stageTabs.append(button);buttons.set(value,{button,count});
   }
-  if(!result.personalReviewQueue)queueWork="all";
+  if(!result.personalReviewQueue||(!result.intake&&queueWork==="letter_contact"))queueWork="all";
   const filters=el("div",undefined,"field-grid queue-filters");
   const searchField=el("label","Find an entry");
   const search=el("input");search.type="search";search.placeholder="Student name, school or entry ID";search.value=queueSearch;
@@ -1230,7 +1246,8 @@ async function showCommittee(focusQueue=false){
   const workField=el("label","Review and follow-up");
   const work=el("select");
   for(const [control,options] of [[type,[["all","All entry types"],["self","Applications"],["nomination","Nominations"]]],
-   [work,[["all","All review activity"],["needs_review","Needs my evaluation"],["reviewed","I’ve evaluated"],["follow_up","Requirements pending"]]]]){
+   [work,[["all","All review activity"],["needs_review","Needs my evaluation"],["reviewed","I’ve evaluated"],["follow_up","Requirements pending"],
+    ...(result.intake?[["letter_contact","Needs letter delivery route"]]:[])]]]){
    for(const [value,label] of options){
     const option=el("option",label);option.value=value;control.append(option);
    }
@@ -1246,7 +1263,8 @@ async function showCommittee(focusQueue=false){
    const term=queueSearch.trim().toLowerCase();
    const matching=entries.filter(item=>(queueType==="all"||item.type===queueType)&&
     (queueWork==="all"||(queueWork==="needs_review"&&!selectionFilesClosed(item.status)&&!item.myReviewSaved)||
-     (queueWork==="reviewed"&&item.myReviewSaved)||(queueWork==="follow_up"&&!selectionFilesClosed(item.status)&&item.requirementsPending>0))&&
+     (queueWork==="reviewed"&&item.myReviewSaved)||(queueWork==="follow_up"&&!selectionFilesClosed(item.status)&&item.requirementsPending>0)||
+     (queueWork==="letter_contact"&&needsNominationDelivery(item.nominationDelivery)))&&
     [item.studentName,item.entryId,item.school||""].some(value=>value.toLowerCase().includes(term)));
    const filtered=matching.filter(item=>matchesStage(item,queueStage));
    for(const [value,{button,count:total}] of buttons){
@@ -1262,6 +1280,7 @@ async function showCommittee(focusQueue=false){
      const notes=[item.myReviewSaved?"Evaluation saved":!selectionFilesClosed(item.status)?"Your evaluation pending":""];
      if(!selectionFilesClosed(item.status)&&item.requirementsPending)
       notes.push(item.requirementsPending+" program requirement"+(item.requirementsPending===1?"":"s")+" pending");
+     if(needsNominationDelivery(item.nominationDelivery))notes.push("Needs letter delivery route");
      if(notes.some(Boolean))row.firstElementChild.append(el("p",notes.filter(Boolean).join(" · "),"committee-row-detail"));
     }
     list.append(row);
@@ -1389,6 +1408,23 @@ async function openReview(entryId,section="overview"){
   const overview=el("div",undefined,"workspace-stack");
   overview.id="review-overview";
   const closed=selectionFilesClosed(d.status);
+  const letterRoute=d.nominationLetter?.delivery;
+  if(letterRoute){
+   const delivery=workspaceCard("Nomination letter delivery");
+   if(d.applicantEmail)delivery.append(infoRow("Student email",d.applicantEmail));
+   if(d.guardianEmail)delivery.append(infoRow("Parent or guardian email",d.guardianEmail));
+   if(letterRoute==="nominator_handoff"||letterRoute==="ask_nominator")
+    delivery.append(infoRow("Nominator email",d.nominator.email));
+   const guidance={
+    student_email:"Confirm the address before sending the student’s letter and private Entry Key.",
+    guardian_email:"Confirm the address before sending the letter privately to the parent or guardian for the student.",
+    nominator_handoff:"The nominator can pass along the letter. Arrange a sealed handoff to the student or guardian and honor the nominator’s privacy preference.",
+    ask_nominator:"Ask the nominator for a student or guardian email they can share, or confirm a private handoff in Student details.",
+    missing:"No delivery route is on file. Confirm a student or guardian email and add it in Student details."
+   };
+   delivery.append(el("p",guidance[letterRoute],needsNominationDelivery(letterRoute)?"callout":"help"));
+   overview.append(delivery);
+  }
   if(d.selectionStages)overview.append(renderSelectionStages(d));
   if(!closed){
    const readiness=workspaceCard("Readiness checklist");
@@ -1489,6 +1525,14 @@ async function openReview(entryId,section="overview"){
    const dataForm=el("form",undefined,"entry-form");
    dataForm.innerHTML='<div class="field-grid"><label>Student name <input name="studentName" maxlength="120" required></label><label>School <input name="school" maxlength="160"></label><label>Grade <select name="grade"><option value="">Unknown</option><option value="9">9</option><option value="10">10</option><option value="11">11</option><option value="12">12</option></select></label><label>Graduation year <input type="number" name="graduationYear" min="2026" max="2040" step="1"></label><label>Nominee contact email <input type="email" name="applicantEmail"></label><label>Guardian email <input type="email" name="guardianEmail"></label><label>Guardian name <input name="guardianName"></label><label>Student age band <select name="ageBand"><option value="">Unknown</option><option value="minor">Under 18</option><option value="adult">18 or older</option></select></label><label>Verified unweighted GPA <input type="number" min="0" max="4" step=".01" name="gpa"></label></div><p>Qualified references</p><div class="field-grid"><label>Academic reference name <input name="ref1Name"></label><label>Academic reference email <input type="email" name="ref1Email"></label><label>Character reference name <input name="ref2Name"></label><label>Character reference email <input type="email" name="ref2Email"></label></div><button class="btn btn-outline" type="submit">Save verified contact details</button>';
    for(const key of ["studentName","school","grade","graduationYear","applicantEmail","guardianEmail","guardianName","ageBand","gpa"])if(d[key]!==null&&d[key]!==undefined&&dataForm.elements[key])dataForm.elements[key].value=String(d[key]);
+   const canConfirmHandoff=d.type==="nomination"&&!!d.nominator?.email;
+   if(canConfirmHandoff){
+    const field=el("label",undefined,"check-label");
+    const input=el("input");input.type="checkbox";input.name="nominationHandoff";
+    input.checked=d.nominationLetter?.nominatorHandoff===true;
+    field.append(input,document.createTextNode(" The nominator confirmed they can deliver the nomination letter privately."));
+    dataForm.firstElementChild.after(field);
+   }
    (d.referenceSuggestions||[]).forEach((v,i)=>{const j=i+1;dataForm.elements["ref"+j+"Name"].value=v.name||"";dataForm.elements["ref"+j+"Email"].value=v.email||"";});
    dataForm.addEventListener("submit",async e=>{
     e.preventDefault();const f=new FormData(dataForm);
@@ -1496,6 +1540,7 @@ async function openReview(entryId,section="overview"){
      studentName:f.get("studentName"),school:f.get("school"),grade:f.get("grade"),graduationYear:f.get("graduationYear"),
      applicantEmail:f.get("applicantEmail"),guardianEmail:f.get("guardianEmail"),guardianName:f.get("guardianName"),
      ageBand:f.get("ageBand"),gpa:f.get("gpa"),
+     ...(canConfirmHandoff?{nominationHandoff:f.get("nominationHandoff")==="on"}:{}),
      references:[{name:f.get("ref1Name"),email:f.get("ref1Email")},{name:f.get("ref2Name"),email:f.get("ref2Email")}]
     }},entryId);
    });
