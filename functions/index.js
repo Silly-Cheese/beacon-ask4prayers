@@ -28,7 +28,7 @@ function intakeSettings(snapshot){
  const parts=Object.fromEntries(centralDate.formatToParts(new Date()).map(({type,value})=>[type,value]));
  const deadlinePassed=!!intakeDeadline&&[parts.year,parts.month,parts.day].join("-")>intakeDeadline;
  return {cycle,intakeOpen:intakeManuallyOpen&&!deadlinePassed,intakeManuallyOpen,intakeDeadline,deadlinePassed,
-  honoraryOnly:true,brandedVerification:beaconMail.enabled()};
+  honoraryOnly:true,brandedVerification:beaconMail.enabled(),nominationPostalDelivery:true};
 }
 async function requireOpenIntake(tx){
  const settings=intakeSettings(await tx.get(intakeRef));
@@ -45,10 +45,21 @@ const bool=v=>v===true;
 const dedupe=o=>hash([o.studentName,o.school,o.graduationYear].map(x=>String(x).toLowerCase().trim().replace(/\s+/g,"")).join("|"));
 const entryClosed=status=>["selected","not_selected","merged","withdrawn"].includes(status);
 const canReachNominator=entry=>entry.privacy!=="anonymous"&&!!entry.nominator?.email;
+function nominationAddress(value){
+ if(value==null)return null;
+ if(typeof value!=="object"||Array.isArray(value))err("Enter a mailing address for the nomination letter.");
+ const limits={recipient:120,line1:160,line2:100,city:100,state:80,zip:15};
+ const address=Object.fromEntries(Object.entries(limits).map(([key,max])=>[key,str(value[key],max)]));
+ if(!Object.values(address).some(Boolean))return null;
+ if(!address.line1||!address.city||!address.state||!/^\d{5}(?:-\d{4})?$/.test(address.zip))
+  err("Enter a street address or P.O. box, city, state and valid ZIP code for the nomination letter.");
+ return address;
+}
 function nominationDelivery(entry){
  if(entry.type!=="nomination"||entryClosed(entry.status))return null;
  if(entry.applicantEmail)return "student_email";
  if(entry.guardianEmail)return "guardian_email";
+ if(entry.nominationAddress)return "postal_mail";
  if(canReachNominator(entry))return entry.nominationHandoff===true?"nominator_handoff":"ask_nominator";
  return "missing";
 }
@@ -248,9 +259,10 @@ exports.submitEntry=onCall(opts,async r=>{
    if(prior.exists)return prior.get("entryId");
   }
   await requireOpenIntake(tx);
-  if(!d.applicantEmail&&!d.guardianEmail&&!nominationHandoff)
-   err(privacy==="anonymous"?"Provide a student or guardian email so Beacon can deliver the nomination letter."
-    :"Provide a student or guardian email, or confirm you can deliver the letter privately.");
+  const address=nominationAddress(r.data?.nominationAddress);
+  if(!d.applicantEmail&&!d.guardianEmail&&!address&&!nominationHandoff)
+   err(privacy==="anonymous"?"Provide a student or guardian email or mailing address so Beacon can deliver the letter."
+    :"Provide a student or guardian email or mailing address, or confirm you can deliver the letter privately.");
   if(quota){
    const q=await tx.get(quota),count=Number(q.data()?.count||0);
    if(count>=2)throw new HttpsError("resource-exhausted","This account has submitted two nominations today. You can submit another after midnight UTC.");
@@ -258,7 +270,7 @@ exports.submitEntry=onCall(opts,async r=>{
   }
   if(receipt)tx.create(receipt,{entryId:doc.id,createdAt:stamp()});
   tx.create(doc,{
-   ...d,personalStatement:d.personalStatement,type:"nomination",privacy,nominator,nominationHandoff,
+   ...d,personalStatement:d.personalStatement,type:"nomination",privacy,nominator,nominationHandoff,nominationAddress:address,
    cycle,status:"submitted",entryId:doc.id,
    submitterUid:privacy==="anonymous"?null:r.auth.uid,applicantUid:null,
    submittedAt:stamp(),createdAt:stamp(),lastUpdatedAt:stamp(),publicId:null,
@@ -294,6 +306,7 @@ exports.importNominations=onCall({...opts,timeoutSeconds:120},async r=>{
   try{
    if(!raw||typeof raw!=="object"||Array.isArray(raw))err("Invalid CSV record.");
    const d=normalize(raw);
+   const address=nominationAddress(raw.nominationAddress);
    if(d.studentName.length<3)err("A student name of at least 3 characters is required.");
    if(d.personalStatement.length<15)err("Include at least 15 characters explaining the nomination.");
    if(d.grade&&!["9","10","11","12"].includes(d.grade))
@@ -320,7 +333,7 @@ exports.importNominations=onCall({...opts,timeoutSeconds:120},async r=>{
     continue;
    }
    seen.set(fingerprint,index);
-   candidates.push({index,rowNumber,d,nominator,privacy,fingerprint,sourceReceivedAt:str(raw.sourceReceivedAt,100)});
+   candidates.push({index,rowNumber,d,nominator,privacy,address,fingerprint,sourceReceivedAt:str(raw.sourceReceivedAt,100)});
   }catch(e){
    results[index]={rowNumber,status:"invalid",message:e.message||"Invalid nomination."};
   }
@@ -338,7 +351,7 @@ exports.importNominations=onCall({...opts,timeoutSeconds:120},async r=>{
     }
     const entry=db.collection("entries").doc();
     const record={
-     ...c.d,type:"nomination",privacy:c.privacy,nominator:c.nominator,
+     ...c.d,type:"nomination",privacy:c.privacy,nominator:c.nominator,nominationAddress:c.address,
      cycle,status:"submitted",entryId:entry.id,
      submitterUid:r.auth.uid,applicantUid:null,
      submittedAt:stamp(),createdAt:stamp(),lastUpdatedAt:stamp(),publicId:null,
@@ -483,7 +496,8 @@ exports.getReviewEntry=onCall(opts,async r=>{
     keyIssued:!!d.entryKeyHash,needsEntryKey:d.type==="nomination"&&!d.applicantUid&&!entryClosed(d.status),
     followUpRequested:d.nominationFollowUp?.requestedAt?.toDate?.()?.toISOString?.()||null,
     formsQueued:d.nominationFollowUp?.formsQueued===true,
-    delivery:nominationDelivery(d),nominatorHandoff:d.nominationHandoff===true
+    delivery:nominationDelivery(d),nominatorHandoff:d.nominationHandoff===true,
+    ...(d.type==="nomination"?{mailingAddress:d.nominationAddress||null}:{})
    }:null
  }};
 });
@@ -848,6 +862,10 @@ exports.updateEntryContacts=onCall(opts,async r=>{
  if("guardianEmail" in fields)changes.guardianEmail=mail(fields.guardianEmail);
  if("guardianName" in fields)changes.guardianName=str(fields.guardianName,120);
  if("applicantEmail" in fields)changes.applicantEmail=mail(fields.applicantEmail);
+ if("nominationAddress" in fields){
+  if(original.type!=="nomination")err("A nomination is required to save a nomination mailing address.");
+  changes.nominationAddress=nominationAddress(fields.nominationAddress);
+ }
  if("nominationHandoff" in fields){
   if(original.type!=="nomination"||!canReachNominator(original)||typeof fields.nominationHandoff!=="boolean")
    err("A nominator with an email on file is required to arrange letter delivery.");

@@ -11,7 +11,7 @@
 ## Current functionality
 - Required email/password account registration before student applications.
 - Four-step student application with secure autosave to Firestore and resume from dashboard.
-- Named, confidential and fully anonymous official nominations. A nomination counts as an official entry. New nominations require a student or guardian email or a named or confidential nominator who can deliver the letter. The Committee portal flags older and CSV-imported entries that still need a delivery route.
+- Named, confidential and fully anonymous official nominations. A nomination counts as an official entry. New nominations require a student or guardian email, a U.S. mailing address, or a named or confidential nominator who can deliver the letter. Mailing addresses are visible to administrators in the selection file and can be included in Committee CSV imports. The Committee portal flags older and CSV-imported entries that still need a delivery route.
 - Two references, guardian information, individualized invitation links, response forms and controlled administrative verification.
 - Nominated student can claim an existing nomination with a verified-email invitation.
 - Restricted Selection Committee: candidate file, private reviews, 100-point rubric, founder and committee decisions, recusals, and documented eligibility.

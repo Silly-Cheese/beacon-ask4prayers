@@ -134,6 +134,7 @@ onAuthStateChanged(auth,async u=>{
 function updateIntakeStatus(program){
  settings=program;
  intakeState=typeof program?.intakeOpen!=="boolean"?"unavailable":program.intakeOpen?"open":"closed";
+ $("nomination-postal").hidden=program?.nominationPostalDelivery!==true;
  refreshGates();
 }
 function formError(kind,message=""){
@@ -390,7 +391,16 @@ student.addEventListener("submit",async e=>{
  finally{studentBusy=false;refreshGates();}
 });
 
+const postalParts=["recipient","line1","line2","city","state","zip"];
+const postalField=part=>"postal"+part[0].toUpperCase()+part.slice(1);
+function readNominationAddress(get){
+ const address=Object.fromEntries(postalParts.map(part=>[part,String(get(postalField(part))||"").trim()]));
+ return Object.values(address).some(Boolean)?address:null;
+}
+const validNominationAddress=address=>!address||!!(address.line1&&address.city&&address.state&&/^\d{5}(?:-\d{4})?$/.test(address.zip));
+const nominationAddressError="Enter a street address or P.O. box, city, state and valid ZIP code for the nomination letter.";
 const nomForm=$("nomination-form");
+$("nomination-postal").append($("nomination-postal-fields").content.cloneNode(true));
 const nominationDeliveryError=$("nomination-delivery-error");
 nomForm.addEventListener("input",()=>{
  if(!nominationBusy)nominationRequestId=null;
@@ -427,10 +437,20 @@ nomForm.addEventListener("submit",async e=>{
  }
  const d=new FormData(nomForm),get=x=>String(d.get(x)||"").trim();
  const privacy=get("privacy"),nominationHandoff=get("nominationHandoff")==="on";
- if(!get("applicantEmail")&&!get("guardianEmail")&&!nominationHandoff){
+ const postalEnabled=settings?.nominationPostalDelivery===true;
+ const address=postalEnabled?readNominationAddress(get):null;
+ if(!validNominationAddress(address)){
+  nominationDeliveryError.textContent=nominationAddressError;
+  nominationDeliveryError.hidden=false;
+  $("nomination-postal").open=true;
+  nomForm.elements[postalField("line1")].focus();
+  return;
+ }
+ if(!get("applicantEmail")&&!get("guardianEmail")&&!address&&!nominationHandoff){
+  const contact=postalEnabled?"student or guardian email or mailing address":"student or guardian email";
   nominationDeliveryError.textContent=privacy==="anonymous"
-   ?"Enter the student’s or guardian’s email so we can deliver the letter."
-   :"Enter a student or guardian email, or confirm you can deliver the letter privately.";
+   ?"Enter a "+contact+" so we can deliver the letter."
+   :"Enter a "+contact+", or confirm you can deliver the letter privately.";
   nominationDeliveryError.hidden=false;
   nomForm.elements.applicantEmail.focus();
   return;
@@ -452,7 +472,8 @@ nomForm.addEventListener("submit",async e=>{
   nominationRequestId||=crypto.randomUUID();
   const out=await call("submitEntry",{
    type:"nomination",privacy,fields,requestId:nominationRequestId,declaration:get("declaration")==="on",nominatorName:get("nominatorName"),
-   nominatorEmail,nominationHandoff,relationship:get("relationship"),message:get("message")
+   nominatorEmail,nominationHandoff,relationship:get("relationship"),message:get("message"),
+   ...(address?{nominationAddress:address}:{})
   });
   nominationRequestId=null;
   nomForm.reset();nominationPrivacy();
@@ -967,6 +988,14 @@ const csvNominationFields=[
  ["guardianEmail","Guardian email",["guardian email","parent email","parent or guardian email"]],
  ["sourceReceivedAt","Date received",["date received","received at","received date","submission date","timestamp","date"]]
 ];
+const csvPostalFields=[
+ ["postalRecipient","Mailing Addressee",["mailing addressee","mailing recipient"]],
+ ["postalLine1","Mailing Address",["mailing address","mailing address line 1","street address","address line 1","po box"]],
+ ["postalLine2","Mailing Address Line 2",["mailing address line 2","mailing unit"]],
+ ["postalCity","Mailing City",["mailing city","postal city"]],
+ ["postalState","Mailing State",["mailing state","postal state"]],
+ ["postalZip","Mailing ZIP",["mailing zip","mailing zip code","mailing postal code"]]
+];
 const csvKey=s=>String(s||"").toLowerCase().trim().replace(/[^a-z0-9]/g,"");
 function parseNominationCsv(raw){
  const text=String(raw||"").replace(/^\uFEFF/,"");
@@ -997,8 +1026,9 @@ function parseNominationCsv(raw){
  }
  return {headers,records:rows};
 }
-function csvNominationTemplate(){
- const headers=["Student Name","Nomination Statement","School","Grade","Graduation Year","Nominator Name","Nominator Email","Nominator Relationship","Student Email","Under 18","GPA","Future Goals","Community Service","Date Received"];
+function csvNominationTemplate(postalEnabled){
+ const headers=["Student Name","Nomination Statement","School","Grade","Graduation Year","Nominator Name","Nominator Email","Nominator Relationship","Student Email","Under 18","GPA","Future Goals","Community Service","Date Received",
+  ...(postalEnabled?csvPostalFields.map(([,label])=>label):[])];
  const blob=new Blob(["\uFEFF"+headers.join(",")+"\r\n"],{type:"text/csv;charset=utf-8"});
  const url=URL.createObjectURL(blob),link=document.createElement("a");
  link.href=url;link.download="beacon-nominations-template.csv";
@@ -1019,7 +1049,8 @@ function csvAgeBand(value){
  if(Number.isInteger(age)&&age>=13&&age<=120)return age<18?"minor":"adult";
  return raw;
 }
-function renderNominationCsvImport(){
+function renderNominationCsvImport(postalEnabled){
+ const csvFields=postalEnabled?[...csvNominationFields,...csvPostalFields]:csvNominationFields;
  const outer=el("details",undefined,"workspace-card committee-import");
  outer.append(el("summary","Bulk import · emailed nominations (CSV)"));
  const content=el("div",undefined,"committee-import-content");
@@ -1030,7 +1061,7 @@ function renderNominationCsvImport(){
  const label=el("label","Select a CSV file");
  const picker=el("input");picker.type="file";picker.accept=".csv,text/csv";picker.setAttribute("aria-label","Choose nomination CSV file");
  label.append(picker);
- const template=el("button","Download CSV template","btn btn-outline");template.type="button";template.onclick=csvNominationTemplate;
+ const template=el("button","Download CSV template","btn btn-outline");template.type="button";template.onclick=()=>csvNominationTemplate(postalEnabled);
  toolbar.append(label,template);content.append(toolbar);
  const message=el("p","Select a CSV to preview nominations.","help");
  message.setAttribute("role","status");
@@ -1056,6 +1087,11 @@ function renderNominationCsvImport(){
    values.grade=csvGrade(values.grade);
    values.ageBand=csvAgeBand(values.ageBand);
    const issues=[];
+   if(postalEnabled){
+    const address=readNominationAddress(key=>readField(record,key));
+    if(address)values.nominationAddress=address;
+    if(!validNominationAddress(address))issues.push(nominationAddressError);
+   }
    if(values.studentName.length<3)issues.push("Student name missing or too short");
    if(values.personalStatement.length<15)issues.push("Nomination reason must have at least 15 characters");
    if(values.grade&&!["9","10","11","12"].includes(values.grade))issues.push("Grade is invalid");
@@ -1101,7 +1137,7 @@ function renderNominationCsvImport(){
  };
  const renderMapping=()=>{
   mappingGrid.replaceChildren();
-  for(const [key,title] of csvNominationFields){
+  for(const [key,title] of csvFields){
    const field=el("label",title);
    const select=el("select"),none=el("option","Not included");none.value="-1";select.append(none);
    headers.forEach((h,i)=>{const option=el("option",h);option.value=String(i);select.append(option);});
@@ -1121,7 +1157,7 @@ function renderNominationCsvImport(){
    const parsed=parseNominationCsv(await file.text());
    filename=file.name.slice(0,120);headers=parsed.headers;records=parsed.records;
    const keys=headers.map(csvKey),used=new Set();
-   for(const [key,,aliases] of csvNominationFields){
+   for(const [key,,aliases] of csvFields){
     const i=keys.findIndex((v,j)=>!used.has(j)&&aliases.some(alias=>csvKey(alias)===v));
     mapping[key]=i;
     if(i>=0)used.add(i);
@@ -1206,7 +1242,7 @@ async function showCommittee(focusQueue=false){
    const intake=el("details",undefined,"workspace-card committee-settings");
    intake.append(el("summary","Intake settings · "+(result.intake.intakeOpen?"Open":"Closed")),renderIntakeControls(result.intake));
    box.append(intake);
-   box.append(renderNominationCsvImport());
+   box.append(renderNominationCsvImport(result.intake.nominationPostalDelivery===true));
   }
   const entries=[...(result.entries||[])];
   let cursor=result.nextCursor;
@@ -1409,20 +1445,29 @@ async function openReview(entryId,section="overview"){
   overview.id="review-overview";
   const closed=selectionFilesClosed(d.status);
   const letterRoute=d.nominationLetter?.delivery;
-  if(letterRoute){
+  const address=d.nominationLetter?.mailingAddress;
+  if(letterRoute||address){
    const delivery=workspaceCard("Nomination letter delivery");
    if(d.applicantEmail)delivery.append(infoRow("Student email",d.applicantEmail));
    if(d.guardianEmail)delivery.append(infoRow("Parent or guardian email",d.guardianEmail));
    if(letterRoute==="nominator_handoff"||letterRoute==="ask_nominator")
     delivery.append(infoRow("Nominator email",d.nominator.email));
+   if(address){
+    const postal=el("p");
+    postal.append(el("strong","Mailing address"));
+    for(const line of [address.recipient||d.studentName,address.line1,address.line2,address.city+", "+address.state+" "+address.zip].filter(Boolean))
+     postal.append(el("br"),document.createTextNode(line));
+    delivery.append(postal);
+   }
    const guidance={
     student_email:"Confirm the address before sending the student’s letter and private Entry Key.",
     guardian_email:"Confirm the address before sending the letter privately to the parent or guardian for the student.",
+    postal_mail:"Use Print nomination letter, then mail it in a sealed envelope to the address above.",
     nominator_handoff:"The nominator can pass along the letter. Arrange a sealed handoff to the student or guardian and honor the nominator’s privacy preference.",
-    ask_nominator:"Ask the nominator for a student or guardian email they can share, or confirm a private handoff in Student details.",
-    missing:"No delivery route is on file. Confirm a student or guardian email and add it in Student details."
+    ask_nominator:"Ask the nominator for an email or mailing address they can share, or confirm a private handoff in Student details.",
+    missing:"No delivery route is on file. Add a confirmed email or mailing address in Student details."
    };
-   delivery.append(el("p",guidance[letterRoute],needsNominationDelivery(letterRoute)?"callout":"help"));
+   if(guidance[letterRoute])delivery.append(el("p",guidance[letterRoute],needsNominationDelivery(letterRoute)?"callout":"help"));
    overview.append(delivery);
   }
   if(d.selectionStages)overview.append(renderSelectionStages(d));
@@ -1533,14 +1578,32 @@ async function openReview(entryId,section="overview"){
     field.append(input,document.createTextNode(" The nominator confirmed they can deliver the nomination letter privately."));
     dataForm.firstElementChild.after(field);
    }
+   const editPostal=Object.hasOwn(d.nominationLetter||{},"mailingAddress");
+   const postalDetails=el("details",undefined,"intake-details");
+   if(editPostal){
+    postalDetails.open=!!address;
+    postalDetails.append(el("summary","Nomination mailing address"),
+     el("p","Use a confirmed U.S. address for the nomination letter. Clear all address fields to remove it.","help"),
+     $("nomination-postal-fields").content.cloneNode(true));
+    dataForm.firstElementChild.after(postalDetails);
+    for(const part of postalParts)dataForm.elements[postalField(part)].value=address?.[part]||"";
+   }
    (d.referenceSuggestions||[]).forEach((v,i)=>{const j=i+1;dataForm.elements["ref"+j+"Name"].value=v.name||"";dataForm.elements["ref"+j+"Email"].value=v.email||"";});
    dataForm.addEventListener("submit",async e=>{
     e.preventDefault();const f=new FormData(dataForm);
+    const updatedAddress=editPostal?readNominationAddress(key=>f.get(key)):null;
+    if(!validNominationAddress(updatedAddress)){
+     postalDetails.open=true;
+     notify(nominationAddressError);
+     dataForm.elements[postalField("line1")].focus();
+     return;
+    }
     await action("updateEntryContacts",{entryId,fields:{
      studentName:f.get("studentName"),school:f.get("school"),grade:f.get("grade"),graduationYear:f.get("graduationYear"),
      applicantEmail:f.get("applicantEmail"),guardianEmail:f.get("guardianEmail"),guardianName:f.get("guardianName"),
      ageBand:f.get("ageBand"),gpa:f.get("gpa"),
      ...(canConfirmHandoff?{nominationHandoff:f.get("nominationHandoff")==="on"}:{}),
+     ...(editPostal?{nominationAddress:updatedAddress}:{}),
      references:[{name:f.get("ref1Name"),email:f.get("ref1Email")},{name:f.get("ref2Name"),email:f.get("ref2Email")}]
     }},entryId);
    });
