@@ -39,6 +39,20 @@ The **Selection stages** section lets administrators move an entry back one stag
 
 After opening entries, submit a fictional application and nomination and confirm each receipt appears in the Committee queue. Administrators can issue guardian and reference invitations there. Links can be delivered manually or queued by a configured Firebase Trigger Email extension.
 
+
+## Import emailed nominations from CSV
+
+An administrator can open [Committee](https://beacon.ask4prayers.com/#committee), expand **Bulk import · emailed nominations (CSV)**, and upload a CSV file. Use **Download CSV template** for a clean set of headers, or upload an existing spreadsheet exported as UTF-8 CSV. Match any unfamiliar headers with **Adjust column mapping**, review the preview, then select **Import nominations**. Each valid CSV row creates a separate nomination record with its own entry ID.
+
+Only **Student Name** (or first and last name columns) and **Nomination Statement** are required for the import; a meaningful statement must contain at least 15 characters. School, grade, graduation year, GPA, guardian information and references can be missing from emailed nominations. The imported entries enter **Submitted** and remain unverified until the committee obtains and checks the missing information. The CSV import does **not** verify the sender, assert a signed nomination declaration, verify eligibility, send emails, or automatically create guardian/reference consent responses.
+
+Importer protection: administrators must have the Firebase admin custom claim and a verified account email. CSVs are limited to **300 records and 2 MB**; each server request processes at most **20 nominations**. The preview flags invalid rows, and imports proceed in batches with per-row results. An identical nomination already imported is skipped automatically, including if the file is uploaded again. Similar names are **not** silently merged; check duplicate warnings in each selection file before merging supporting nominations. If an import fails midway, correcting the error and retrying does not re-create already imported records.
+
+Any nominator information from a CSV remains **confidential**, visible only to Beacon administrators. If no nominator identity is supplied, the entry is treated as anonymous. Students cannot see the importing administrator's identity or automatically see sender information. Protect any exported email or CSV file after importing because it may contain student or nominator contact information.
+
+Deploy the latest **Firebase Functions** (not just GitHub Pages) before using this tool. The new callable function is importNominations.
+
+
 ## Nomination letters and student follow-up
 
 Open a nomination in Committee and click **Print nomination letter**. An unlinked, active nomination gets a private, 30-day Entry Key. If the letter is reissued from a newly opened selection file, the previous key is replaced after confirmation. Give the letter privately to the student.
