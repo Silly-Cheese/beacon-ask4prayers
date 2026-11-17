@@ -261,6 +261,100 @@ exports.submitEntry=onCall(opts,async r=>{
  });
  return {received:true,entryId};
 });
+
+/**
+ * Committee-only import of nominations received outside the public portal.
+ * Each uploaded CSV record becomes an independent nomination; it does not
+ * assert a nominator's declaration or verify eligibility, references or consent.
+ */
+exports.importNominations=onCall({...opts,timeoutSeconds:120},async r=>{
+ owner(r);
+ if(r.auth.token.email_verified!==true)
+  throw new HttpsError("failed-precondition","Verify your administrator email before importing nominations.");
+ const rawRows=r.data?.rows;
+ if(!Array.isArray(rawRows)||rawRows.length<1||rawRows.length>20)
+  err("Import between 1 and 20 nomination rows per request.");
+ const sourceFile=str(r.data?.sourceFile,120)||"Emailed nominations CSV";
+ const results=new Array(rawRows.length);
+ const candidates=[],seen=new Map();
+ for(const [index,raw] of rawRows.entries()){
+  const rowNumber=Number.isInteger(raw?.rowNumber)&&raw.rowNumber>1&&raw.rowNumber<100000?raw.rowNumber:index+2;
+  try{
+   if(!raw||typeof raw!=="object"||Array.isArray(raw))err("Invalid CSV record.");
+   const d=normalize(raw);
+   if(d.studentName.length<3)err("A student name of at least 3 characters is required.");
+   if(d.personalStatement.length<15)err("Include at least 15 characters explaining the nomination.");
+   if(d.grade&&!["9","10","11","12"].includes(d.grade))
+    err("Grade must be 9, 10, 11, 12 or blank.");
+   if(raw.graduationYear!==undefined&&raw.graduationYear!==null&&String(raw.graduationYear).trim()&&!d.graduationYear)
+    err("Graduation year must be 2026–2040 or blank.");
+   if(d.ageBand&&!["minor","adult"].includes(d.ageBand))
+    err("Under 18 must be Yes, No or blank.");
+   const nominator={
+    name:str(raw.nominatorName,120),email:mail(raw.nominatorEmail),
+    relationship:str(raw.relationship,100),message:str(raw.nominatorMessage,1800)
+   };
+   const privacy=nominator.name||nominator.email?"confidential":"anonymous";
+   // Content-based receipt: reimporting a previously handled email/CSV
+   // does not generate another student record.
+   const fingerprint=hash(JSON.stringify([
+    cycle,d.studentName.toLowerCase().replace(/\s+/g," "),
+    d.school.toLowerCase().replace(/\s+/g," "),
+    d.personalStatement.toLowerCase().replace(/\s+/g," "),
+    nominator.email,nominator.name.toLowerCase()
+   ]));
+   if(seen.has(fingerprint)){
+    results[index]={rowNumber,status:"duplicate",message:"Identical nomination already appears earlier in this batch."};
+    continue;
+   }
+   seen.set(fingerprint,index);
+   candidates.push({index,rowNumber,d,nominator,privacy,fingerprint,sourceReceivedAt:str(raw.sourceReceivedAt,100)});
+  }catch(e){
+   results[index]={rowNumber,status:"invalid",message:e.message||"Invalid nomination."};
+  }
+ }
+ if(candidates.length){
+  const receipts=candidates.map(c=>db.collection("nominationImportKeys").doc(c.fingerprint));
+  const created=await db.runTransaction(async tx=>{
+   const existing=await Promise.all(receipts.map(ref=>tx.get(ref)));
+   const out=[];
+   for(const [i,c] of candidates.entries()){
+    if(existing[i].exists){
+     out.push({index:c.index,rowNumber:c.rowNumber,status:"duplicate",
+      entryId:existing[i].get("entryId"),message:"This nomination was already imported."});
+     continue;
+    }
+    const entry=db.collection("entries").doc();
+    const record={
+     ...c.d,type:"nomination",privacy:c.privacy,nominator:c.nominator,
+     cycle,status:"submitted",entryId:entry.id,
+     submitterUid:r.auth.uid,applicantUid:null,
+     submittedAt:stamp(),createdAt:stamp(),lastUpdatedAt:stamp(),publicId:null,
+     guardianStatus:"pending",referenceStatus:"pending",referenceCount:0,
+     selectionReady:false,verifiedEligibility:false,decision:null,
+     duplicateKey:dedupe(c.d),
+     source:"committee_csv",sourceFile,sourceReceivedAt:c.sourceReceivedAt,
+     importedBy:r.auth.uid,importedAt:stamp(),
+     // No declaration or reference verification is inferred from email text.
+     importedUnverified:true
+    };
+    tx.create(entry,record);
+    tx.create(receipts[i],{entryId:entry.id,cycle,sourceFile,createdAt:stamp(),actorUid:r.auth.uid});
+    tx.create(db.collection("auditLogs").doc(),{
+     action:"nomination_imported",entryId:entry.id,actorUid:r.auth.uid,
+     at:stamp(),sourceFile,rowNumber:c.rowNumber
+    });
+    out.push({index:c.index,rowNumber:c.rowNumber,status:"created",entryId:entry.id});
+   }
+   return out;
+  });
+  for(const item of created)results[item.index]=item;
+ }
+ return {results,created:results.filter(item=>item.status==="created").length,
+  duplicates:results.filter(item=>item.status==="duplicate").length,
+  invalid:results.filter(item=>item.status==="invalid").length};
+});
+
 exports.getMyEntries=onCall(opts,async r=>{
  requireAuth(r);
  const q=await db.collection("entries").where("applicantUid","==",r.auth.uid).limit(30).get();
