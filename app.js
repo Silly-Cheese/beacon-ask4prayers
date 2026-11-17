@@ -928,6 +928,248 @@ function renderIntakeControls(program){
  return panel;
 }
 
+
+const csvNominationFields=[
+ ["studentName","Student full name",["student name","nominee name","nominee","name of student","name of nominee","student full name","full name of nominee","candidate name","student","name"]],
+ ["studentFirstName","Student first name",["student first name","nominee first name","first name"]],
+ ["studentLastName","Student last name",["student last name","nominee last name","last name"]],
+ ["personalStatement","Nomination / reason",["nomination statement","nomination message","nomination","reason for nomination","why are you nominating this student","why do you recommend this student","why should this student be nominated","tell us why","why nominate","explanation","reason","message","student description","describe this student","comments"]],
+ ["school","School",["school","school name","high school","high school name","student school","school attended"]],
+ ["grade","Grade",["grade","grade level","student grade","current grade"]],
+ ["graduationYear","Graduation year",["graduation year","grad year","class year","year of graduation","expected graduation"]],
+ ["state","State",["state","student state"]],
+ ["applicantEmail","Student email",["student email","nominee email","applicant email","student email address"]],
+ ["nominatorName","Nominator name",["nominator name","submitted by","your name","name of nominator","sender name","from name","nominated by"]],
+ ["nominatorEmail","Nominator email",["nominator email","your email","sender email","from email","nominator email address","email of nominator"]],
+ ["relationship","Nominator relationship",["relationship","relationship to student","how do you know the student","nominator relationship"]],
+ ["nominatorMessage","Additional nominator message",["nominator note","nominator message","additional nominator message"]],
+ ["ageBand","Under 18?",["under 18","is student under 18","minor","age band","student age"]],
+ ["gpa","Unweighted GPA",["gpa","unweighted gpa","student gpa"]],
+ ["futureGoals","Future plans",["future goals","future plans","career goals","plans for future"]],
+ ["activities","Activities",["activities","leadership","clubs and activities"]],
+ ["service","Community service",["community service","service","volunteering"]],
+ ["guardianName","Guardian name",["guardian name","parent name","parent or guardian name"]],
+ ["guardianEmail","Guardian email",["guardian email","parent email","parent or guardian email"]],
+ ["sourceReceivedAt","Date received",["date received","received at","received date","submission date","timestamp","date"]]
+];
+const csvKey=s=>String(s||"").toLowerCase().trim().replace(/[^a-z0-9]/g,"");
+function parseNominationCsv(raw){
+ const text=String(raw||"").replace(/^\uFEFF/,"");
+ const rows=[];let row=[],cell="",quoted=false,afterQuote=false;
+ const endCell=()=>{row.push(cell.trim());cell="";afterQuote=false;};
+ const endRow=()=>{endCell();if(row.some(value=>value!==""))rows.push(row);row=[];};
+ for(let i=0;i<text.length;i++){
+  const c=text[i];
+  if(quoted){
+   if(c==='"'&&text[i+1]==='"'){cell+='"';i++;}
+   else if(c==='"'){quoted=false;afterQuote=true;}
+   else cell+=c;
+  }else if(c==='"'&&!cell.trim()&&!afterQuote){quoted=true;cell="";}
+  else if((c===","||c==="\n"||c==="\r")&&!quoted){
+   if(c===",")endCell();else{if(c==="\r"&&text[i+1]==="\n")i++;endRow();}
+  }else if(afterQuote){
+   if(!/\s/.test(c))throw Error("Unexpected characters after a quoted CSV value.");
+  }else cell+=c;
+ }
+ if(quoted)throw Error("An opening CSV quote is missing its closing quote.");
+ if(cell||row.length)endRow();
+ if(rows.length<2)throw Error("The CSV needs a header row and at least one nomination.");
+ if(rows[0].length>75)throw Error("The CSV has too many columns (maximum 75).");
+ if(rows.length>301)throw Error("Upload at most 300 nominations per CSV file.");
+ const headers=rows.shift().map((h,i)=>h||"Column "+(i+1));
+ for(const [i,r] of rows.entries()){
+  if(r.length!==headers.length)throw Error("CSV record "+(i+2)+" has "+r.length+" columns; the header has "+headers.length+". Check for an unquoted comma or newline.");
+ }
+ return {headers,records:rows};
+}
+function csvNominationTemplate(){
+ const headers=["Student Name","Nomination Statement","School","Grade","Graduation Year","Nominator Name","Nominator Email","Nominator Relationship","Student Email","Under 18","GPA","Future Goals","Community Service","Date Received"];
+ const blob=new Blob(["\uFEFF"+headers.join(",")+"\r\n"],{type:"text/csv;charset=utf-8"});
+ const url=URL.createObjectURL(blob),link=document.createElement("a");
+ link.href=url;link.download="beacon-nominations-template.csv";
+ document.body.append(link);link.click();link.remove();
+ setTimeout(()=>URL.revokeObjectURL(url),1000);
+}
+function csvGrade(value){
+ const raw=String(value||"").trim().toLowerCase();
+ const match=raw.match(/^(9|10|11|12)(?:st|nd|rd|th)?(?:\s*grade)?$/);
+ return match?match[1]:({freshman:"9",sophomore:"10",junior:"11",senior:"12"}[raw]||raw);
+}
+function csvAgeBand(value){
+ const raw=String(value||"").trim().toLowerCase();
+ if(!raw)return "";
+ if(["yes","y","true","under 18","minor","underage"].includes(raw))return "minor";
+ if(["no","n","false","adult","18+","18 or older"].includes(raw))return "adult";
+ const age=Number(raw);
+ if(Number.isInteger(age)&&age>=13&&age<=120)return age<18?"minor":"adult";
+ return raw;
+}
+function renderNominationCsvImport(){
+ const outer=el("details",undefined,"workspace-card committee-import");
+ outer.append(el("summary","Bulk import · emailed nominations (CSV)"));
+ const content=el("div",undefined,"committee-import-content");
+ content.append(
+  el("p","Upload a CSV exported from your email, spreadsheet, or nomination form. Each valid row becomes its own confidential nomination in the selection queue. No email is automatically sent and no missing eligibility, reference or guardian details are treated as verified.","help")
+ );
+ const toolbar=el("div",undefined,"workspace-actions");
+ const label=el("label","Select a CSV file");
+ const picker=el("input");picker.type="file";picker.accept=".csv,text/csv";picker.setAttribute("aria-label","Choose nomination CSV file");
+ label.append(picker);
+ const template=el("button","Download CSV template","btn btn-outline");template.type="button";template.onclick=csvNominationTemplate;
+ toolbar.append(label,template);content.append(toolbar);
+ const message=el("p","Select a CSV to preview nominations.","help");
+ message.setAttribute("role","status");
+ const mapDetails=el("details",undefined,"committee-import-mapping");
+ mapDetails.hidden=true;mapDetails.append(el("summary","Adjust column mapping"));
+ const mappingGrid=el("div",undefined,"field-grid committee-import-fields");
+ mapDetails.append(mappingGrid);
+ const preview=el("div",undefined,"committee-import-preview");
+ const send=el("button","Import nominations","btn btn-gold");send.type="button";send.disabled=true;
+ const result=el("div",undefined,"committee-import-result");result.setAttribute("role","status");
+ const actions=el("div",undefined,"workspace-actions");
+ actions.append(send);content.append(message,mapDetails,preview,actions,result);outer.append(content);
+ let filename="",headers=[],records=[],mapping={},busy=false;
+ const readField=(row,key)=>Number.isInteger(mapping[key])&&mapping[key]>=0?String(row[mapping[key]]||"").trim():"";
+ const mappedRows=()=>{
+  const seen=new Set();
+  return records.map((record,index)=>{
+   const values={rowNumber:index+2};
+   for(const [key] of csvNominationFields){
+    if(key!=="studentFirstName"&&key!=="studentLastName")values[key]=readField(record,key);
+   }
+   if(!values.studentName)values.studentName=[readField(record,"studentFirstName"),readField(record,"studentLastName")].filter(Boolean).join(" ");
+   values.grade=csvGrade(values.grade);
+   values.ageBand=csvAgeBand(values.ageBand);
+   const issues=[];
+   if(values.studentName.length<3)issues.push("Student name missing or too short");
+   if(values.personalStatement.length<15)issues.push("Nomination reason must have at least 15 characters");
+   if(values.grade&&!["9","10","11","12"].includes(values.grade))issues.push("Grade is invalid");
+   if(values.graduationYear&&(!/^\d{4}$/.test(values.graduationYear)||Number(values.graduationYear)<2026||Number(values.graduationYear)>2040))issues.push("Graduation year is invalid");
+   if(values.ageBand&&!["minor","adult"].includes(values.ageBand))issues.push("Under 18 value is invalid");
+   if(values.gpa&&(!Number.isFinite(Number(values.gpa))||Number(values.gpa)<0||Number(values.gpa)>4))issues.push("GPA is invalid");
+   for(const key of ["nominatorEmail","applicantEmail","guardianEmail"]){
+    if(values[key]&&!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(values[key]))issues.push(key+" is not a valid email");
+   }
+   const fp=[values.studentName,values.school,values.personalStatement,values.nominatorEmail,values.nominatorName]
+    .map(s=>s.toLowerCase().replace(/\s+/g," ").trim()).join("|");
+   if(!issues.length&&seen.has(fp))issues.push("Repeated identical nomination within this CSV");
+   if(!issues.length)seen.add(fp);
+   const incomplete=["school","grade","graduationYear"].filter(key=>!values[key]).length;
+   return {values,issues,incomplete};
+  });
+ };
+ const updatePreview=()=>{
+  preview.replaceChildren();result.replaceChildren();
+  if(!headers.length){send.disabled=true;return;}
+  const rows=mappedRows(),valid=rows.filter(r=>!r.issues.length),invalid=rows.length-valid.length;
+  message.textContent=filename+" · "+rows.length+" records · "+valid.length+" ready · "+invalid+" need correction or removal. "+
+   "Rows without school, grade or graduation year may still be imported for later eligibility screening.";
+  const tableWrap=el("div",undefined,"committee-import-table-wrap");
+  const table=el("table",undefined,"committee-import-table");
+  const head=el("thead"),headRow=el("tr");
+  for(const heading of ["CSV row","Student","Nomination","School / grade","Readiness"])headRow.append(el("th",heading));
+  head.append(headRow);table.append(head);
+  const body=el("tbody");
+  for(const row of rows.slice(0,15)){
+   const tr=el("tr");
+   tr.append(el("td",String(row.values.rowNumber)),el("td",row.values.studentName||"—"),
+    el("td",row.values.personalStatement.slice(0,120)+(row.values.personalStatement.length>120?"…":"")),
+    el("td",[row.values.school,row.values.grade].filter(Boolean).join(" · ")||"To verify"),
+    el("td",row.issues.length?row.issues.join("; "):row.incomplete?"Ready · eligibility details pending":"Ready"));
+   if(row.issues.length)tr.dataset.state="invalid";
+   body.append(tr);
+  }
+  table.append(body);tableWrap.append(table);preview.append(tableWrap);
+  if(rows.length>15)preview.append(el("p","Showing 15 of "+rows.length+" records. All records are validated before import.","help"));
+  send.textContent="Import "+valid.length+" nomination"+(valid.length===1?"":"s");
+  send.disabled=busy||valid.length===0;
+ };
+ const renderMapping=()=>{
+  mappingGrid.replaceChildren();
+  for(const [key,title] of csvNominationFields){
+   const field=el("label",title);
+   const select=el("select"),none=el("option","Not included");none.value="-1";select.append(none);
+   headers.forEach((h,i)=>{const option=el("option",h);option.value=String(i);select.append(option);});
+   select.value=String(mapping[key]??-1);
+   select.onchange=()=>{mapping[key]=Number(select.value);updatePreview();};
+   field.append(select);mappingGrid.append(field);
+  }
+ };
+ picker.onchange=async()=>{
+  if(busy)return;
+  headers=[];records=[];mapping={};filename="";mapDetails.hidden=true;
+  preview.replaceChildren();result.replaceChildren();send.disabled=true;
+  const file=picker.files?.[0];
+  if(!file){message.textContent="Select a CSV to preview nominations.";return;}
+  if(file.size>2*1024*1024){message.textContent="CSV is too large. Use a file under 2 MB and up to 300 records.";return;}
+  try{
+   const parsed=parseNominationCsv(await file.text());
+   filename=file.name.slice(0,120);headers=parsed.headers;records=parsed.records;
+   const keys=headers.map(csvKey),used=new Set();
+   for(const [key,,aliases] of csvNominationFields){
+    const i=keys.findIndex((v,j)=>!used.has(j)&&aliases.some(alias=>csvKey(alias)===v));
+    mapping[key]=i;
+    if(i>=0)used.add(i);
+   }
+   mapDetails.hidden=false;renderMapping();updatePreview();
+  }catch(e){message.textContent="CSV error: "+e.message;}
+ };
+ send.onclick=async()=>{
+  if(busy)return;
+  const rows=mappedRows(),ready=rows.filter(row=>!row.issues.length).map(row=>row.values);
+  if(!ready.length)return;
+  if(!confirm("Import "+ready.length+" nominations into the Class of 2027 selection queue? Each will be a separate unverified nomination record."))return;
+  busy=true;send.disabled=true;picker.disabled=true;result.replaceChildren();
+  const details=el("details",undefined,"committee-import-report");
+  const detailBody=el("div",undefined,"committee-import-report-rows");
+  const counts={created:0,duplicate:0,invalid:0};
+  let processed=0,error=null;
+  for(let offset=0;offset<ready.length;offset+=20){
+   const chunk=ready.slice(offset,offset+20);
+   message.textContent="Importing nominations "+(offset+1)+"–"+Math.min(offset+20,ready.length)+" of "+ready.length+"…";
+   try{
+    const response=await call("importNominations",{sourceFile:filename,rows:chunk});
+    for(const item of response.results||[]){
+     if(Object.hasOwn(counts,item.status))counts[item.status]++;
+     const report=el("p","Row "+item.rowNumber+" · "+item.status+
+      (item.entryId?" · "+item.entryId:"")+(item.message?" · "+item.message:""));
+     if(item.status==="invalid")report.classList.add("danger-text");
+     detailBody.append(report);
+    }
+    processed+=chunk.length;
+   }catch(e){
+    error=readable(e);
+    break;
+   }
+  }
+  result.append(el("h3","Import result"));
+  result.append(el("p",counts.created+" created · "+counts.duplicate+" already imported · "+counts.invalid+" rejected"+
+   (error?" · Import stopped after "+processed+" rows":"")+"."));
+  if(error)result.append(el("p","Import stopped: "+error,"danger-text"));
+  if(detailBody.childElementCount){
+   details.append(el("summary","View row-by-row results"),detailBody);result.append(details);
+  }
+  if(counts.created) {
+   const refresh=el("button","Refresh selection queue","btn btn-outline");
+   refresh.type="button";refresh.onclick=()=>showCommittee(true);
+   result.append(refresh);
+  }
+  message.textContent=filename+" · "+ready.length+" valid records prepared. "+
+   (error?"Fix the error and retry; successfully imported records will be skipped automatically.":"Import complete. Uploading the same nominations again will not create duplicates.");
+  busy=false;picker.disabled=false;updatePreview();
+  // updatePreview clears result; retain the completed report.
+  result.append(el("p",counts.created+" new nominations were created. "+counts.duplicate+" were duplicates and "+counts.invalid+" were rejected."));
+  if(error)result.append(el("p",error,"danger-text"));
+  if(counts.created){
+   const link=el("button","Refresh selection queue","btn btn-outline");
+   link.type="button";link.onclick=()=>showCommittee(true);
+   result.append(link);
+  }
+  if(detailBody.childElementCount){const report=el("details",undefined,"committee-import-report");report.append(el("summary","Row-by-row results"),detailBody);result.append(report);}
+ };
+ return outer;
+}
+
 let queueStage="all",queueSearch="",queueType="all",queueWork="all",queuePages=1;
 const reviewDrafts=new Map();
 async function showCommittee(focusQueue=false){
@@ -948,6 +1190,7 @@ async function showCommittee(focusQueue=false){
    const intake=el("details",undefined,"workspace-card committee-settings");
    intake.append(el("summary","Intake settings · "+(result.intake.intakeOpen?"Open":"Closed")),renderIntakeControls(result.intake));
    box.append(intake);
+   box.append(renderNominationCsvImport());
   }
   const entries=[...(result.entries||[])];
   let cursor=result.nextCursor;
