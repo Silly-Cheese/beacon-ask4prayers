@@ -495,6 +495,34 @@ input::placeholder,textarea::placeholder{color:#938577}
 .recognition-stories > .workspace-card { padding: clamp(1.1rem, 3vw, 2.2rem); }
 .scholar-recognition-details { margin: 1.25rem 0 0; }
 
+
+/* Committee bulk CSV importer */
+.committee-import > summary { cursor:pointer; font-weight:750; color:var(--gold-strong); list-style-position:inside; }
+.committee-import-content { display:grid; gap:1rem; border-top:1px solid var(--workspace-line); padding-top:1rem; margin-top:1rem; min-width:0; }
+.committee-import .workspace-actions { margin:.25rem 0; }
+.committee-import .workspace-actions label { display:grid; gap:.4rem; min-width:min(100%, 18rem); }
+.committee-import input[type="file"] { width:100%; max-width:100%; }
+.committee-import-mapping { padding:.9rem 1rem; border:1px solid var(--workspace-line); border-radius:13px; }
+.committee-import-mapping > summary, .committee-import-report > summary { cursor:pointer; font-weight:700; }
+.committee-import-fields { margin-top:1rem; grid-template-columns:repeat(auto-fit,minmax(min(100%,14rem),1fr)); }
+.committee-import-fields label { min-width:0; }
+.committee-import-fields select { max-width:100%; }
+.committee-import-table-wrap { overflow-x:auto; max-width:100%; border:1px solid var(--workspace-line); border-radius:12px; }
+.committee-import-table { width:100%; min-width:640px; border-collapse:collapse; font-size:.88rem; }
+.committee-import-table th, .committee-import-table td { padding:.7rem .75rem; text-align:left; border-bottom:1px solid var(--workspace-line); vertical-align:top; overflow-wrap:anywhere; max-width:24rem; }
+.committee-import-table th { background:var(--workspace-inset); color:var(--gold-strong); white-space:nowrap; }
+.committee-import-table tr[data-state="invalid"] { background:rgba(136,50,43,.13); }
+.committee-import-result { display:grid; gap:.6rem; }
+.committee-import-result h3, .committee-import-result p { margin:0; }
+.committee-import-result button { justify-self:start; }
+.committee-import-report-rows { max-height:22rem; overflow:auto; }
+.committee-import-report-rows p { border-bottom:1px solid var(--workspace-line); padding:.5rem 0; }
+@media (max-width:680px) {
+ .committee-import-content { gap:.8rem; }
+ .committee-import .workspace-actions { flex-direction:column; align-items:stretch; }
+ .committee-import .workspace-actions button { width:100%; }
+}
+
 .committee-settings > summary { cursor: pointer; font-weight: 700; color: var(--cream); }
 .committee-settings > .workspace-card {
   margin-top: .8rem;
