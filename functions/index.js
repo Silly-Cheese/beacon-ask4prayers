@@ -440,6 +440,8 @@ exports.getReviewEntry=onCall(opts,async r=>{
    duplicateCount:duplicates?.size||0,
    nominator:isAdmin(r)&&d.privacy!=="anonymous"?d.nominator:null,
    duplicateKey:d.duplicateKey,eligibilityNote:isAdmin(r)?d.eligibilityNote||"":"",
+   importedUnverified:!!d.importedUnverified,importSource:isAdmin(r)?d.sourceFile||null:null,
+   sourceReceivedAt:isAdmin(r)?d.sourceReceivedAt||null:null,
    references:refs.docs.map(x=>{
      const reference=x.data();
      if(isAdmin(r))return {id:x.id,...reference};
@@ -809,6 +811,26 @@ exports.updateEntryContacts=onCall(opts,async r=>{
  if(!snap.exists)throw new HttpsError("not-found","Entry not found.");
  if(["selected","not_selected","merged","withdrawn"].includes(snap.get("status")))throw new HttpsError("failed-precondition","Entry is closed.");
  const original=snap.data(),fields=r.data?.fields||{},changes={lastUpdatedAt:stamp()};
+ if("studentName" in fields){
+  changes.studentName=str(fields.studentName,120);
+  if(changes.studentName.length<3)err("Student name must be at least 3 characters.");
+ }
+ if("school" in fields)changes.school=str(fields.school,160);
+ if("grade" in fields){
+  const grade=str(fields.grade,4);
+  if(grade&&!["9","10","11","12"].includes(grade))err("Grade must be 9–12 or blank.");
+  changes.grade=grade;
+ }
+ if("graduationYear" in fields){
+  const val=String(fields.graduationYear??"").trim();
+  changes.graduationYear=val?y(val):null;
+  if(val&&!changes.graduationYear)err("Graduation year must be 2026–2040 or blank.");
+ }
+ if(["studentName","school","grade","graduationYear"].some(k=>k in changes&&changes[k]!==original[k])){
+  changes.duplicateKey=dedupe({...original,...changes});
+  changes.verifiedEligibility=false;
+ }
+
  if("guardianEmail" in fields)changes.guardianEmail=mail(fields.guardianEmail);
  if("guardianName" in fields)changes.guardianName=str(fields.guardianName,120);
  if("applicantEmail" in fields)changes.applicantEmail=mail(fields.applicantEmail);
