@@ -33,7 +33,7 @@ The queue shows stage counts for loaded entries. Search by student, school, or e
 
 Inside a selection file, **Overview** shows the current stage and readiness checklist. Keep the student’s statement, reference responses, and your evaluation open in their own sections. The evaluation form calculates the score out of 100. **Eligibility & decision** lists the outstanding requirements for each outcome.
 
-Administrators can advance an entry from **Submitted** to **Eligibility screening**, verify eligibility to move into **Committee review**, then advance to **Finalist** once the required forms are verified. The **Final decision** section applies the existing review requirements when naming a Scholar. Class of 2027 is capped at two Scholars.
+New entries begin in **Processing**. Committee members confirm the account attached to a direct application or link a nomination to a student account after independently verifying identity. Once any nomination follow-up is complete, Processing moves to **Eligibility screening**. Administrators then verify eligibility to advance to **Committee review**, then to **Finalist** once required forms are verified. The **Final decision** section applies the existing review requirements when naming a Scholar. Class of 2027 is capped at two Scholars.
 
 The **Selection stages** section lets administrators move an entry back one stage or reopen a decision with a reason. Reopening a Scholar decision returns the entry to Finalist and suspends verification and Passport access until the decision is recorded again. Reviewers can see the stages and record their evaluations. Students see the status of their own linked entries in My Dashboard.
 
@@ -44,7 +44,7 @@ After opening entries, submit a fictional application and nomination and confirm
 
 An administrator can open [Committee](https://beacon.ask4prayers.com/#committee), expand **Bulk import · emailed nominations (CSV)**, and upload a CSV file. Use **Download CSV template** for a clean set of headers, or upload an existing spreadsheet exported as UTF-8 CSV. Match any unfamiliar headers with **Adjust column mapping**, review the preview, then select **Import nominations**. Each valid CSV row creates a separate nomination record with its own entry ID.
 
-Only **Student Name** (or first and last name columns) and **Nomination Statement** are required for the import; a meaningful statement must contain at least 15 characters. School, grade, graduation year, GPA, guardian information and references can be missing from emailed nominations. The imported entries enter **Submitted** and remain unverified until the committee obtains and checks the missing information. The CSV import does **not** verify the sender, assert a signed nomination declaration, verify eligibility, send emails, or automatically create guardian/reference consent responses.
+Only **Student Name** (or first and last name columns) and **Nomination Statement** are required for the import; a meaningful statement must contain at least 15 characters. School, grade, graduation year, GPA, guardian information and references can be missing from emailed nominations. The imported entries enter **Processing** and remain unverified until the committee obtains and checks the missing information. The CSV import does **not** verify the sender, assert a signed nomination declaration, verify eligibility, send emails, or automatically create guardian/reference consent responses.
 
 Importer protection: administrators must have the Firebase admin custom claim and a verified account email. CSVs are limited to **300 records and 2 MB**; each server request processes at most **20 nominations**. The preview flags invalid rows, and imports proceed in batches with per-row results. An identical nomination already imported is skipped automatically, including if the file is uploaded again. Similar names are **not** silently merged; check duplicate warnings in each selection file before merging supporting nominations. If an import fails midway, correcting the error and retrying does not re-create already imported records.
 
@@ -53,11 +53,17 @@ Any nominator information from a CSV remains **confidential**, visible only to B
 Deploy the latest **Firebase Functions** (not just GitHub Pages) before using this tool. The new callable function is importNominations.
 
 
-## Nomination letters and student follow-up
+## Nomination lookup and account processing
 
-Open a nomination in Committee and click **Print nomination letter**. An unlinked, active nomination gets a private, 30-day Entry Key. If the letter is reissued from a newly opened selection file, the previous key is replaced after confirmation. Give the letter privately to the student.
+The public homepage features a prominent **Check for my nomination** action, and the main navigation includes **Check nomination**. Students can visit [Check for a nomination](https://beacon.ask4prayers.com/#find-nomination), enter their full name, and receive a simple nomination-existence result. No student essay, status, addresses, or confidential nominator details are returned by the name lookup. The lookup has per-account and IP-based hourly rate limits.
 
-The student signs in with a verified account, enters the key at [Continue your nomination](https://beacon.ask4prayers.com/#claim), and submits the follow-up from **My dashboard**. They supply outstanding academic and character references and request guardian consent if they are under 18. The submitted request appears in the Committee selection file. With Apps Script configured, outstanding forms are emailed automatically. Admins can also issue or replace private forms from **References and consent**.
+Students who find a nomination create an account with **their own email and password**, verify the email, and request to connect their record by providing their school and grade. **Name, self-reported school, and self-reported grade are not proof of identity.** A committee member must independently verify the request before linking it; the selection file requires a verification method and documented notes. Once linked, the student opens My Dashboard to complete their nomination follow-up, references, and guardian consent where required.
+
+Committee **Selection queue → Needs account processing (new and older)** shows all records without a confirmed student account, regardless of whether the selection record is in Processing, screening, review, finalist, or an earlier final decision. The **Student account** panel in the selection file shows outstanding name-lookup requests and existing Beacon accounts from previous student applications with matching names. Authorized committee members can link an existing account or confirm the account already attached to an older application. Check independent evidence before choosing a match, particularly for students with the same name.
+
+For older records, account connection is **independent of the selection stage**. Linking or confirming an account does not change an old decision, erase evaluations, change eligibility, or reset finalist recognition. Records already marked **Not selected** can be connected so the rightful student can view the decision; previously selected Scholars remain selected. New nominations and direct applications still start in Processing, and the committee advances them only after account confirmation and required follow-up. Legacy records already at later stages remain at those stages.
+
+No new Entry Keys are issued. Previously printed Entry Keys are still accepted through the legacy claim page so letters already delivered continue to work. New nomination letters point students to the name lookup and account-connection procedure.
 
 ## Branded email and automatic form requests
 
