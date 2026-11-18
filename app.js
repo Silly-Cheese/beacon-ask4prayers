@@ -5,7 +5,7 @@ import {
 } from "https://www.gstatic.com/firebasejs/13.1.0/firebase-auth.js";
 const $=id=>document.getElementById(id),qs=(s,root=document)=>root.querySelector(s),qsa=(s,root=document)=>[...root.querySelectorAll(s)];
 const call=async(name,data={})=>(await callable(name)(data)).data;
-const PAGE={home:"public-view",mission:"mission-view",selection:"selection-view",recognition:"recognition-view",faq:"faq-view",apply:"apply-view",nominate:"nominate-view",account:"account-view",dashboard:"dashboard-view",scholar:"scholar-view",committee:"committee-view",policy:"policy-view",reference:"reference-view",consent:"consent-view",claim:"claim-view",verify:"verify-view"};
+const PAGE={home:"public-view",mission:"mission-view",selection:"selection-view",recognition:"recognition-view",faq:"faq-view",apply:"apply-view",nominate:"nominate-view","find-nomination":"find-nomination-view",account:"account-view",dashboard:"dashboard-view",scholar:"scholar-view",committee:"committee-view",policy:"policy-view",reference:"reference-view",consent:"consent-view",claim:"claim-view",verify:"verify-view"};
 let currentUser=null,settings={cycle:"2027",intakeOpen:false},intakeState="loading",step=0;
 let draftLoadedFor=null,draftLoading=null,saveTimer=null,savingPromise=null,inviteToken=null,activeScholarId=null;
 let studentBusy=false,nominationBusy=false,nominationRequestId=null,submittedApplication=null,accountReturn="dashboard";
@@ -43,11 +43,11 @@ function route(dashboardEntryId){
  const page=key==="opportunities"?"recognition":Object.hasOwn(PAGE,key)?key:"home";
  if(page==="account"){
   const target=parts.join("/");
-  accountReturn=/^(apply|nominate|dashboard|committee|claim)$|^claim\/[A-Za-z0-9_-]{43}$/.test(target)?target:"dashboard";
+  accountReturn=/^(apply|nominate|find-nomination|dashboard|committee|claim)$|^claim\/[A-Za-z0-9_-]{43}$/.test(target)?target:"dashboard";
   const link=$("account-continue");
   link.href="#"+accountReturn;
   const destinations={apply:"Continue to your application →",nominate:"Return to your nomination →",
-   claim:"Continue your nomination →",committee:"Open Committee →",dashboard:"Open dashboard →"};
+   claim:"Continue your nomination →","find-nomination":"Return to your nomination lookup →",committee:"Open Committee →",dashboard:"Open dashboard →"};
   link.textContent=destinations[accountReturn]||destinations.claim;
  }
  inviteToken=(page==="reference"||page==="consent"||page==="claim")?parts.join("/"):null;
@@ -60,6 +60,7 @@ function route(dashboardEntryId){
  if(page==="apply")prepareApplication();
  if(page==="dashboard")showDashboard(typeof dashboardEntryId==="string"?dashboardEntryId:null);
  if(page==="committee")showCommittee();
+ if(page==="find-nomination")refreshNominationLookup();
  if(page==="scholar")showScholar();
  if(page==="reference"||page==="consent")loadInvitation(page);
  if(page==="claim"){
@@ -113,6 +114,7 @@ function refreshGates(){
  });
  $("student-prev").disabled=studentBusy;
  nominationPrivacy();
+ refreshNominationLookup();
 }
 onAuthStateChanged(auth,async u=>{
  const previousUid=currentUser?.isAnonymous?null:currentUser?.uid;
@@ -499,12 +501,12 @@ nomForm.addEventListener("submit",async e=>{
 });
 
 const statusLabels={
- submitted:"Submitted",screening:"Eligibility screening",under_review:"Committee review",finalist:"Finalist",selected:"Beacon Scholar",
+ processing:"Processing",submitted:"Submitted",screening:"Eligibility screening",under_review:"Committee review",finalist:"Finalist",selected:"Beacon Scholar",
  not_selected:"Not selected",withdrawn:"Withdrawn",merged:"Merged",verified:"Verified",
  pending:"Pending",not_required:"Not required",signed_pending_verification:"Awaiting verification",
  awaiting_verification:"Awaiting verification"
 };
-const statusText=value=>statusLabels[value]||String(value||"Pending").replace(/_/g," ");
+const statusText=value=>statusLabels[value==="submitted"&&settings.nominationNameLookup?"processing":value]||String(value||"Pending").replace(/_/g," ");
 const entryType=entry=>entry.type==="nomination"?"Nomination":"Application";
 function statusBadge(value){
  const badge=el("span",statusText(value),"workspace-status");
@@ -541,18 +543,23 @@ function workspaceFacts(facts){
 }
 async function showDashboard(openEntryId=null){
  const root=$("dashboard-content");root.replaceChildren();
+ const findLink=settings.nominationNameLookup?"#find-nomination":"#claim";
  if(!accountNeeded()){
   const gate=workspaceCard("Sign in to continue","Your drafts and submitted entries are linked to your Beacon account.");
   gate.append(workspaceLink("Sign in or create an account","#account/dashboard","btn-gold"),
-   workspaceLink("Continue a nomination","#claim"));root.append(gate);return;
+   workspaceLink("Check for a nomination",findLink));root.append(gate);return;
  }
  root.textContent="Loading your Beacon record…";
  try{
   const [draft,submitted]=await Promise.all([call("getDraft"),call("getMyEntries")]);
   const entries=submitted.entries||[];
   root.replaceChildren();
-  const claimCard=workspaceCard("Received a nomination letter?","Use the Entry Key in your letter to connect the nomination to this account.");
-  claimCard.append(workspaceLink("Enter Entry Key","#claim"));root.append(claimCard);
+  if(submitted.nominationConnection?.pending)
+   root.append(workspaceCard("Nomination connection pending","The committee is checking your request for "+submitted.nominationConnection.studentName+". Once confirmed, your nomination will appear under Submitted entries."));
+  const claimCard=workspaceCard("Looking for a nomination?",settings.nominationNameLookup
+   ?"Check by name to request a connection to your account."
+   :"Use the Entry Key from an earlier letter to connect it to your account.");
+  claimCard.append(workspaceLink("Check for a nomination",findLink));root.append(claimCard);
   const currentEntry=entries.find(entry=>entry.cycle===settings.cycle);
   if(!currentEntry){
    const start=workspaceCard(draft.draft?"Saved application":"Apply for recognition",
@@ -585,6 +592,7 @@ function showEntryDetails(root,entry){
   ["Guardian permission",statusText(entry.guardianStatus)],["Entry ID",entry.entryId]
  ]));
  const statusHelp={
+  processing:"Beacon received your entry. The committee is confirming your account connection. Complete any follow-up available below.",
   submitted:"Beacon received your entry. Check here for requests for information.",
   screening:"Beacon is checking eligibility. Keep an eye on your reference and guardian permission statuses.",
   under_review:"Beacon is reviewing your entry. Check back here for updates."
@@ -741,8 +749,13 @@ function nominationLetter(record,entryKey,includeFollowUp){
  next.before(el("p","Your nomination is already your official entry. If you would like to continue, follow the steps below."));
  const steps=el("ol",undefined,"nomination-letter-steps");
  const instructions=[
-  entryKey?"Visit beacon.ask4prayers.com/#claim. Sign in or create a student account and verify your email.":"Sign in to Beacon and open My Dashboard.",
-  entryKey?"Enter the private Entry Key below to connect the nomination to your account.":"Open the nomination already linked to your account.",
+  ...(record.nominationLetter?.nameLookup?[
+   "Visit beacon.ask4prayers.com/#find-nomination and enter your name as it appears on this letter.",
+   "Sign in or create your Beacon account with your own email and password. Verify your email and request a connection. The committee will confirm the connection before your nomination appears in My Dashboard."
+  ]:[
+   entryKey?"Visit beacon.ask4prayers.com/#claim. Sign in or create a student account and verify your email.":"Sign in to Beacon and open My Dashboard.",
+   entryKey?"Enter the private Entry Key below to connect the nomination to your account.":"Open the nomination already linked to your account."
+  ]),
   "In My Dashboard, open your nomination and add one academic reference and one character reference. Skip any reference already received.",
   "If you’re under 18, enter your parent or guardian’s name and email to request a consent form. They complete that form separately.",
   "Submit your follow-up and check My Dashboard for updates."
@@ -868,6 +881,56 @@ const prompts=[
 $("reference-questions").replaceChildren(...prompts.map((q,i)=>{
  const l=el("label",q);const t=el("textarea");t.name="answer"+i;t.rows=4;t.required=true;t.minLength=15;t.maxLength=1600;l.append(t);return l;
 }));
+const nominationLookupForm=$("nomination-lookup-form"),nominationConnectionForm=$("nomination-connection-form");
+const nominationLookupResult=$("nomination-lookup-result");
+let nominationLookupName="",nominationConnectionUid=null;
+function refreshNominationLookup(){
+ const enabled=settings.nominationNameLookup===true,signed=accountNeeded();
+ const matched=enabled&&!!nominationLookupName;
+ const connected=matched&&!!nominationConnectionUid&&nominationConnectionUid===currentUser?.uid;
+ $("nomination-lookup-unavailable").hidden=enabled;
+ nominationLookupForm.hidden=!enabled;
+ $("nomination-lookup-account").hidden=!matched||signed;
+ nominationConnectionForm.hidden=!matched||!signed||connected;
+ $("nomination-lookup-dashboard").hidden=!connected;
+}
+nominationLookupForm.addEventListener("input",()=>{
+ nominationLookupName="";nominationConnectionUid=null;nominationLookupResult.hidden=true;refreshNominationLookup();
+});
+nominationLookupForm.addEventListener("submit",async e=>{
+ e.preventDefault();
+ const button=nominationLookupForm.querySelector("button"),name=nominationLookupForm.elements.studentName.value.trim();
+ if(button.disabled||settings.nominationNameLookup!==true)return;
+ button.disabled=true;nominationLookupName="";nominationConnectionUid=null;refreshNominationLookup();
+ nominationLookupResult.hidden=false;nominationLookupResult.textContent="Checking for a nomination…";
+ try{
+  if(!auth.currentUser)await signInAnonymously(auth);
+  const {found}=await call("findNominationByName",{studentName:name});
+  if(nominationLookupForm.elements.studentName.value.trim()!==name)return;
+  if(found)nominationLookupName=name;
+  nominationLookupResult.textContent=found
+   ?"A nomination was found. Use the options below to request a connection to your Beacon account."
+   :"No active nomination matched that name. Check the spelling or contact Beacon for help.";
+ }catch(error){nominationLookupResult.textContent=readable(error);}
+ finally{button.disabled=false;refreshNominationLookup();}
+});
+nominationConnectionForm.addEventListener("submit",async e=>{
+ e.preventDefault();
+ const button=nominationConnectionForm.querySelector("button"),name=nominationLookupName,uid=currentUser?.uid;
+ if(button.disabled||!name||!accountNeeded())return;
+ button.disabled=true;
+ const fields=new FormData(nominationConnectionForm);
+ try{
+  await verifiedEmail();
+  if(auth.currentUser?.uid!==uid||nominationLookupName!==name)return;
+  const {linked}=await call("requestNominationConnection",{studentName:name,school:fields.get("school"),grade:fields.get("grade")});
+  if(auth.currentUser?.uid!==uid||nominationLookupName!==name)return;
+  nominationConnectionUid=uid;
+  nominationLookupResult.textContent=linked?"Your nomination is available in My Dashboard."
+   :"Your request is in Processing. The committee will confirm your account before your nomination appears in My Dashboard.";
+ }catch(error){nominationLookupResult.textContent=readable(error);}
+ finally{button.disabled=false;refreshNominationLookup();}
+});
 async function loadClaim(){
  const info=$("claim-info"),form=$("claim-form"),token=inviteToken;
  const signed=accountNeeded(),keyInput=form.elements.entryKey;
@@ -934,7 +997,7 @@ for(const kind of ["reference","consent"]){
  });
 }
 
-const selectionStages=["submitted","screening","under_review","finalist","selected"];
+const selectionStages=processing=>[processing?"processing":"submitted","screening","under_review","finalist","selected"];
 const selectionFilesClosed=status=>["selected","not_selected","merged","withdrawn"].includes(status);
 function renderIntakeControls(program){
  const panel=workspaceCard("Applications and nominations");
@@ -1277,8 +1340,9 @@ async function showCommittee(focusQueue=false){
   const stageTabs=el("div",undefined,"committee-stages");
   stageTabs.setAttribute("role","group");
   stageTabs.setAttribute("aria-label","Selection stage");
-  const stages=[["all","All entries"],...selectionStages.map(stage=>[stage,statusText(stage)]),["closed","Closed files"]];
+  const stages=[["all","All entries"],...selectionStages(result.accountProcessing).map(stage=>[stage,statusText(stage)]),["closed","Closed files"]];
   const matchesStage=(item,stage)=>stage==="all"||item.status===stage||
+   (stage==="processing"&&item.status==="submitted")||
    (stage==="closed"&&selectionFilesClosed(item.status)&&item.status!=="selected");
   const buttons=new Map();
   for(const [value,label] of stages){
@@ -1382,9 +1446,10 @@ function pendingRequirements(entry){
 function renderSelectionStages(entry){
  const panel=workspaceCard("Selection stages");
  panel.id="review-stages";
- const index=selectionStages.indexOf(entry.status);
+ const stages=selectionStages(!!entry.accountProcessing);
+ const index=stages.indexOf(entry.accountProcessing?.processing?"processing":entry.status);
  const progress=el("ol",undefined,"stage-track");
- for(const [i,stage] of selectionStages.entries()){
+ for(const [i,stage] of stages.entries()){
   const item=el("li",statusText(stage));
   if(i<index)item.dataset.state="complete";
   if(i===index){item.dataset.state="current";item.setAttribute("aria-current","step");}
@@ -1416,8 +1481,8 @@ function renderSelectionStages(entry){
    :"Reopening returns this student to "+statusText(previous)+". Their prior evaluations remain in the file.","help"),field);
   moveButton("Reopen decision",previous,"btn-outline",()=>input.value,"Reopen the recorded decision for "+entry.studentName+"?");
  }else if(index>=0){
-  if(index>0)moveButton("Move back to "+statusText(selectionStages[index-1]),selectionStages[index-1],"btn-outline");
-  if(entry.status==="submitted")moveButton("Start eligibility screening","screening","btn-gold");
+  if(index>0)moveButton("Move back to "+statusText(stages[index-1]),stages[index-1],"btn-outline");
+  if(entry.status==="submitted"&&!entry.accountProcessing)moveButton("Start eligibility screening","screening","btn-gold");
   if(entry.status==="screening")panel.append(el("p","Open Eligibility & decision to verify eligibility and advance to committee review.","help"));
   if(entry.status==="under_review"){
    const remaining=pendingRequirements(entry);
@@ -1428,6 +1493,38 @@ function renderSelectionStages(entry){
   }
  }
  if(actions.childElementCount)panel.append(actions);
+ return panel;
+}
+
+function renderAccountProcessing(entry){
+ const account=entry.accountProcessing;
+ if(!account||selectionFilesClosed(entry.status)||(!account.processing&&account.linked))return null;
+ const panel=workspaceCard("Student account");
+ const button=(label,mode,requestId)=>{
+  const control=el("button",label,"btn btn-gold");control.type="button";
+  control.onclick=async()=>{
+   if(mode==="link"&&!confirm("Confirm that this account belongs to the student named in this entry?"))return;
+   control.disabled=true;
+   try{await action("processStudentAccount",{entryId:entry.entryId,mode,...(requestId?{requestId}:{})},entry.entryId);}
+   finally{control.disabled=false;}
+  };
+  return control;
+ };
+ if(account.linked){
+  if(!account.confirmed){
+   panel.append(el("p","A student account is attached. Confirm it belongs to this student before screening."),button("Confirm student account","confirm"));
+  }else if(entry.nominationFollowUpNeeded){
+   panel.append(el("p","Account confirmed. The student can now complete their nomination follow-up in My Dashboard."));
+  }else panel.append(el("p","The account is confirmed and the entry is ready for eligibility screening."),button("Move to eligibility screening","advance"));
+ }else if(account.candidates.length){
+  panel.append(el("p","Review the school and grade on the request and confirm the student’s identity before linking their account."));
+  for(const candidate of account.candidates){
+   const card=el("div",undefined,"workspace-subsection");
+   card.append(el("h3",candidate.studentName),infoRow("School on request",candidate.school),
+    infoRow("Grade on request",candidate.grade),button("Link this student account","link",candidate.requestId));
+   panel.append(card);
+  }
+ }else panel.append(el("p","Waiting for the student to find the nomination by name and request a connection from their Beacon account."));
  return panel;
 }
 
@@ -1460,6 +1557,8 @@ async function openReview(entryId,section="overview"){
   const overview=el("div",undefined,"workspace-stack");
   overview.id="review-overview";
   const closed=selectionFilesClosed(d.status);
+  const account=renderAccountProcessing(d);
+  if(account)overview.append(account);
   const letterRoute=d.nominationLetter?.delivery;
   const address=d.nominationLetter?.mailingAddress;
   if(letterRoute||address){
@@ -1476,7 +1575,7 @@ async function openReview(entryId,section="overview"){
     delivery.append(postal);
    }
    const guidance={
-    student_email:"Confirm the address before sending the student’s letter and private Entry Key.",
+    student_email:"Confirm the email address before sending the student’s nomination letter.",
     guardian_email:"Confirm the address before sending the letter privately to the parent or guardian for the student.",
     postal_mail:"Use Print nomination letter, then mail it in a sealed envelope to the address above.",
     nominator_handoff:"The nominator can pass along the letter. Arrange a sealed handoff to the student or guardian and honor the nominator’s privacy preference.",
@@ -1639,8 +1738,10 @@ async function openReview(entryId,section="overview"){
     mergeBox.append(merge);manage.append(mergeBox);
    }
    const invitations=el("div",undefined,"workspace-actions");
-   const claimBtn=el("button","Generate student account-claim invitation","btn btn-outline");
-   claimBtn.type="button";claimBtn.onclick=()=>invitation(entryId,"scholar",null);invitations.append(claimBtn);
+   if(!d.accountProcessing){
+    const claimBtn=el("button","Generate student account-claim invitation","btn btn-outline");
+    claimBtn.type="button";claimBtn.onclick=()=>invitation(entryId,"scholar",null);invitations.append(claimBtn);
+   }
    if(d.type==="nomination"&&d.nominator?.email){
     referenceLabels.forEach((label,slot)=>{
      const btn=el("button","Verify nominator as "+label.toLowerCase(),"btn btn-outline");btn.type="button";
@@ -1686,7 +1787,8 @@ async function openReview(entryId,section="overview"){
    for(const key of ["character","perseverance","service","leadership","potential"])scores[key]=Number(f.get(key));
    await action("recordReview",{entryId,scores,recommend:f.get("recommend"),notes:f.get("notes")},entryId);
   });
-  control.append(reviewForm);
+  if(d.accountProcessing?.processing)control.append(el("p","Evaluations open after Processing is complete.","help"));
+  else control.append(reviewForm);
   const recusal=el("details",undefined,"workspace-subsection");
   const {field:conflictField,input:conflict}=reviewField("Reason for recusal","Describe the conflict of interest",2,400);
   const recuse=el("button","Recuse myself from this entry","btn btn-outline");
@@ -1705,7 +1807,7 @@ async function openReview(entryId,section="overview"){
    if(d.myReview.notes)prior.append(el("p",d.myReview.notes));
    files.append(prior);
   }
-  if(d.canManage&&!closed){
+  if(d.canManage&&!closed&&!d.accountProcessing?.processing){
    const adminTools=el("div",undefined,"workspace-columns");
    adminTools.id="review-admin-actions";
    const eligibility=workspaceCard("Eligibility");

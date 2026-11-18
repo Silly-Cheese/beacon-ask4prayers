@@ -33,7 +33,7 @@
         <a class="btn btn-gold" href="#nominate">Nominate a student</a>
         <a class="btn btn-outline" href="#apply">Apply for recognition</a>
       </div>
-      <p class="home-claim">Already nominated? <a href="#claim">Continue with your Entry Key</a></p>
+      <p class="home-claim">Think you were nominated? <a href="#find-nomination">Check for a nomination</a></p>
       <p class="intake-status" id="public-intake-status" role="status">Checking availability for applications and nominations…</p>
       <p class="deadline-note" data-intake-deadline hidden></p>
     </div>
@@ -93,8 +93,8 @@
       </article>
       <article class="path-card">
         <h3>Continue a nomination</h3>
-        <p>Connect your official entry with the private Entry Key from Beacon and complete your follow-up.</p>
-        <a class="text-link" href="#claim">Enter your Entry Key <span aria-hidden="true">→</span></a>
+        <p>Check for a nomination by entering your name. If Beacon finds it, you can set up your student account.</p>
+        <a class="text-link" href="#find-nomination">Check for a nomination <span aria-hidden="true">→</span></a>
       </article>
     </div>
     <div class="home-utility">
@@ -164,7 +164,11 @@
   <ol class="public-timeline">
     <li class="workspace-card">
       <h2>Submit an application or nomination</h2>
-      <p>Students can apply themselves or have someone submit a nomination on their behalf. If someone has nominated you, use your private Entry Key to connect that entry to your own Beacon account. You can check the submission and follow-up steps in <a class="text-link" href="#dashboard">My Dashboard</a>.</p>
+      <p>Students can apply themselves or have someone submit a nomination on their behalf. If you think you were nominated, check by name and request a connection to your Beacon account. You can check the submission and follow-up steps in <a class="text-link" href="#dashboard">My Dashboard</a>.</p>
+    </li>
+    <li class="workspace-card">
+      <h2>Processing</h2>
+      <p>The committee confirms each entry is connected to the right student account. If you were nominated, sign in or create your own account after checking by name. Once the connection is confirmed, complete the follow-up in My Dashboard.</p>
     </li>
     <li class="workspace-card">
       <h2>Verify eligibility</h2>
@@ -205,8 +209,8 @@
       <div class="guide-reading">
         <h2 id="recognition-nominees">Being nominated</h2>
         <p>Someone saw something worth recognizing in the way you carry yourself. They might remember how you handled a hard situation or the way you’ve been there for people over time. They took the time to tell Beacon what they saw. If you received a nomination, we hope you let yourself enjoy hearing that someone thought of you.</p>
-        <p>Your nomination is your official entry. If you want to continue, use the private Entry Key from Beacon to connect it to your account and see what information the team still needs.</p>
-        <a class="text-link" href="#claim">Continue a nomination →</a>
+        <p>Your nomination is your official entry. If you want to continue, check for your nomination by name and request a connection to your account.</p>
+        <a class="text-link" href="#find-nomination">Continue a nomination →</a>
       </div>
     </section>
 
@@ -265,8 +269,8 @@
   </details>
   <details>
     <summary>What do I do if I received a nomination email or letter?</summary>
-    <p>Sign in with a verified Beacon account and enter your private Entry Key. Open your nomination in My Dashboard and add any outstanding references. If you’re under 18, enter your parent or guardian’s information so they can complete a separate consent form.</p>
-    <a class="text-link" href="#claim">Continue your nomination <span aria-hidden="true">→</span></a>
+    <p>Check for your nomination by name. After the committee connects it to your Beacon account, open it in My Dashboard and add any outstanding references. If you’re under 18, enter your parent or guardian’s information so they can complete a separate consent form.</p>
+    <a class="text-link" href="#find-nomination">Continue your nomination <span aria-hidden="true">→</span></a>
   </details>
   <details>
     <summary>Can I nominate someone privately?</summary>
@@ -351,7 +355,7 @@
   <div class="form-section"><h2>Why are you nominating them?</h2><label>Share a specific example <textarea name="personalStatement" maxlength="6000" minlength="180" required rows="10" placeholder="Describe what the student did and what it showed about their character."></textarea></label></div>
   <div class="form-section">
    <h2>Where should we send the nomination letter?</h2>
-   <p class="help" id="nomination-delivery-help">Give Beacon one way to deliver the letter and private Entry Key. Share only contact details you have permission to provide.</p>
+   <p class="help" id="nomination-delivery-help">Give Beacon one way to deliver the nomination letter. Share only contact details you have permission to provide.</p>
    <div class="field-grid">
     <label>Student email <input name="applicantEmail" type="email" maxlength="254" aria-describedby="nomination-delivery-help"></label>
     <label>Parent or guardian email <input name="guardianEmail" type="email" maxlength="254" aria-describedby="nomination-delivery-help"></label>
@@ -416,6 +420,29 @@
  <div id="scholar-content" class="workspace-stack"></div>
 </section>
 <section id="verify-view" class="view-page wrap workspace-view narrow" hidden><a href="#home" class="back-link">← Home</a><div class="section-kicker">OFFICIAL VERIFICATION</div><h1>Verify a Beacon <em>Scholar.</em></h1><div class="account-card"><p>Check whether a Scholar ID represents an approved Beacon Scholars recognition. Scholar names remain private unless their own publicity permissions allow display.</p><form id="verify-form"><label>Beacon Scholar ID <input name="publicId" maxlength="50" required placeholder="BCN-2027-XXXXXXXX"></label><button type="submit" class="btn btn-gold">Check recognition</button></form><div id="verification-result" aria-live="polite"></div></div></section>
+<section id="find-nomination-view" class="view-page wrap workspace-view" hidden>
+ <a href="#home" class="back-link">← Beacon Scholars</a>
+ <header class="workspace-heading"><h1>Check for a nomination</h1><p>Enter your full name as it would appear on your nomination.</p></header>
+ <div class="workspace-card">
+  <p id="nomination-lookup-unavailable">Name lookup is currently unavailable. <a href="#claim">Use an Entry Key from an earlier letter</a>.</p>
+  <form id="nomination-lookup-form" class="entry-form" hidden>
+   <label>First and last name <input name="studentName" autocomplete="name" minlength="3" maxlength="120" required></label>
+   <button type="submit" class="btn btn-gold">Check for a nomination</button>
+  </form>
+  <p id="nomination-lookup-result" role="status" hidden></p>
+  <div id="nomination-lookup-account" class="workspace-actions" hidden><a href="#account/find-nomination" class="btn btn-gold">Create an account or sign in</a></div>
+  <form id="nomination-connection-form" class="entry-form" hidden>
+   <p class="help">Tell the committee your school and grade so they can confirm they’re connecting the right student.</p>
+   <div class="field-grid">
+    <label>School / learning program <input name="school" minlength="2" maxlength="160" required></label>
+    <label>Grade <select name="grade" required><option value="">Select</option><option>9</option><option>10</option><option>11</option><option>12</option></select></label>
+   </div>
+   <button type="submit" class="btn btn-gold">Request connection</button>
+  </form>
+  <div id="nomination-lookup-dashboard" class="workspace-actions" hidden><a href="#dashboard" class="btn btn-outline">Open My Dashboard</a></div>
+ </div>
+</section>
+
 <section id="claim-view" class="view-page wrap workspace-view narrow" hidden>
  <a href="#dashboard" class="back-link">← My dashboard</a>
  <header class="workspace-heading"><h1>Continue your nomination</h1><p>Your nomination is already your official entry. Connect it to your Beacon account to check what you still need to submit.</p></header>
@@ -443,6 +470,6 @@
 </main>
 <footer class="site-footer"><div class="wrap footer-inner"><div><a class="brand" href="#home"><span class="brand-icon">✦</span><span class="brand-words"><strong>BEACON</strong><small>SCHOLARS</small></span></a><small>An initiative of <a href="https://ask4prayers.com/">The Prayer Project</a></small></div><div class="footer-links"><a href="#mission">About</a><a href="#selection">Selection</a><a href="#recognition">Recognition</a><a href="#faq">FAQ</a><a href="#verify">Verify a Scholar ID</a><a href="#apply">Apply</a><a href="#nominate">Nominate</a><a href="#policy">Privacy notice</a><a href="#committee">Committee</a></div></div><div class="wrap footer-bottom">© <span id="year"></span> The Prayer Project. Beacon Scholars is a recognition initiative.</div></footer>
 <div id="print-document" hidden></div>
-<script type="module" src="app.js?v=nomination-delivery-deferral-20261117"></script>
+<script type="module" src="app.js?v=nomination-processing-20261117"></script>
 </body>
 </html>

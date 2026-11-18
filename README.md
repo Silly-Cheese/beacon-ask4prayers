@@ -13,7 +13,7 @@
 - Four-step student application with secure autosave to Firestore and resume from dashboard.
 - Named, confidential and fully anonymous official nominations. A nomination counts as an official entry. New nominations require a student or guardian email, a U.S. mailing address, or a named or confidential nominator who can deliver the letter. Mailing addresses are visible to administrators in the selection file and can be included in Committee CSV imports. The Committee portal flags older and CSV-imported entries that still need a delivery route.
 - Two references, guardian information, individualized invitation links, response forms and controlled administrative verification.
-- Nominated student can claim an existing nomination with a verified-email invitation.
+- New entries start in Processing. Students check for an active nomination by name, then use their own verified account to request a connection. Committee members confirm the connection before the student can open a nomination and complete follow-up. Previously issued Entry Keys remain redeemable through the earlier claim page.
 - Restricted Selection Committee: candidate file, private reviews, 100-point rubric, founder and committee decisions, recusals, and documented eligibility.
 - Scholar Passport: selected Scholar ID, printable official letter and certificate, founder personal note, delivery preference and private achievements.
 - Public Scholar ID verification without disclosing non-consenting students' names.

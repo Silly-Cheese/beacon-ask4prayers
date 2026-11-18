@@ -28,7 +28,7 @@ function intakeSettings(snapshot){
  const parts=Object.fromEntries(centralDate.formatToParts(new Date()).map(({type,value})=>[type,value]));
  const deadlinePassed=!!intakeDeadline&&[parts.year,parts.month,parts.day].join("-")>intakeDeadline;
  return {cycle,intakeOpen:intakeManuallyOpen&&!deadlinePassed,intakeManuallyOpen,intakeDeadline,deadlinePassed,
-  honoraryOnly:true,brandedVerification:beaconMail.enabled(),nominationPostalDelivery:true,nominationDeliveryDeferral:true};
+  honoraryOnly:true,brandedVerification:beaconMail.enabled(),nominationPostalDelivery:true,nominationDeliveryDeferral:true,nominationNameLookup:true};
 }
 async function requireOpenIntake(tx){
  const settings=intakeSettings(await tx.get(intakeRef));
@@ -44,6 +44,13 @@ const y=v=>{const n=Number(v);return Number.isInteger(n)&&n>=2026&&n<=2040?n:nul
 const bool=v=>v===true;
 const dedupe=o=>hash([o.studentName,o.school,o.graduationYear].map(x=>String(x).toLowerCase().trim().replace(/\s+/g,"")).join("|"));
 const entryClosed=status=>["selected","not_selected","merged","withdrawn"].includes(status);
+const entryProcessing=status=>status==="processing"||status==="submitted";
+const normalizedStudentName=value=>str(value,120).normalize("NFKC").replace(/\s+/g," ").toLowerCase();
+const nominationNameKey=(name,entryCycle=cycle)=>hash(entryCycle+":"+normalizedStudentName(name));
+const nominationRequestRef=uid=>db.collection("nominationAccountRequests").doc(hash(cycle+":"+uid));
+const needsNominationFollowUp=entry=>entry.type==="nomination"&&
+ !!(entry.entryKeyHash||entry.accountConfirmedAt||entryProcessing(entry.status))&&!entry.nominationFollowUp?.requestedAt;
+
 const canReachNominator=entry=>entry.privacy!=="anonymous"&&!!entry.nominator?.email;
 function nominationAddress(value){
  if(value==null)return null;
@@ -213,7 +220,7 @@ exports.submitEntry=onCall(opts,async r=>{
     const formsQueued=queueStudentForms(tx,entry.id,d,r.auth.uid,[0,1],d.ageBand==="minor");
     tx.create(key,{entryId:entry.id,createdAt:stamp()});
     tx.create(entry,{
-      ...d,type:"self",entryId:entry.id,cycle,status:"submitted",applicantUid:r.auth.uid,
+      ...d,type:"self",entryId:entry.id,cycle,status:"processing",applicantUid:r.auth.uid,
       submitterUid:r.auth.uid,submittedAt:stamp(),createdAt:stamp(),lastUpdatedAt:stamp(),
       publicId:null,studentDeclaration:{truthful:true,requirements:true,recordedAt:new Date().toISOString(),version:"2027-v1"},guardianStatus:d.ageBand==="adult"?"not_required":"pending",
       referenceStatus:"pending",referenceCount:0,selectionReady:false,decision:null,
@@ -271,8 +278,8 @@ exports.submitEntry=onCall(opts,async r=>{
   }
   if(receipt)tx.create(receipt,{entryId:doc.id,createdAt:stamp()});
   tx.create(doc,{
-   ...d,personalStatement:d.personalStatement,type:"nomination",privacy,nominator,nominationHandoff,nominationAddress:address,
-   cycle,status:"submitted",entryId:doc.id,
+   ...d,personalStatement:d.personalStatement,type:"nomination",privacy,nominator,nominationHandoff,nominationAddress:address,nominationNameKey:nominationNameKey(d.studentName),
+   cycle,status:"processing",entryId:doc.id,
    submitterUid:privacy==="anonymous"?null:r.auth.uid,applicantUid:null,
    submittedAt:stamp(),createdAt:stamp(),lastUpdatedAt:stamp(),publicId:null,
    nominatorDeclaration:{truthful:true,recordedAt:new Date().toISOString(),version:"2027-v1"},
@@ -352,8 +359,8 @@ exports.importNominations=onCall({...opts,timeoutSeconds:120},async r=>{
     }
     const entry=db.collection("entries").doc();
     const record={
-     ...c.d,type:"nomination",privacy:c.privacy,nominator:c.nominator,nominationAddress:c.address,
-     cycle,status:"submitted",entryId:entry.id,
+     ...c.d,type:"nomination",privacy:c.privacy,nominator:c.nominator,nominationAddress:c.address,nominationNameKey:nominationNameKey(c.d.studentName),
+     cycle,status:"processing",entryId:entry.id,
      submitterUid:r.auth.uid,applicantUid:null,
      submittedAt:stamp(),createdAt:stamp(),lastUpdatedAt:stamp(),publicId:null,
      guardianStatus:"pending",referenceStatus:"pending",referenceCount:0,
@@ -381,10 +388,105 @@ exports.importNominations=onCall({...opts,timeoutSeconds:120},async r=>{
   invalid:results.filter(item=>item.status==="invalid").length};
 });
 
+async function findNominations(name){
+ const normalized=normalizedStudentName(name);
+ const titleCase=normalized.replace(/(^|[\s'-])\p{L}/gu,letter=>letter.toUpperCase());
+ const names=[...new Set([str(name,120),normalized,titleCase,normalized.toUpperCase()])];
+ const entries=db.collection("entries");
+ const [indexed,legacy]=await Promise.all([
+  entries.where("nominationNameKey","==",nominationNameKey(name)).limit(50).get(),
+  entries.where("studentName","in",names).limit(50).get()
+ ]);
+ return [...indexed.docs,...legacy.docs].filter(doc=>doc.get("type")==="nomination"&&
+  (doc.get("cycle")||cycle)===cycle&&!entryClosed(doc.get("status"))&&normalizedStudentName(doc.get("studentName"))===normalized);
+}
+exports.findNominationByName=onCall(opts,async r=>{
+ if(!r.auth?.uid)throw new HttpsError("unauthenticated","Open Beacon again to check for a nomination.");
+ const name=str(r.data?.studentName,120);
+ if(name.length<3)err("Enter your full name.");
+ const hour=Math.floor(Date.now()/3600000),quotas=db.collection("submissionQuotas");
+ const limits=[[quotas.doc(hash("nomination-lookup:"+r.auth.uid+":"+hour)),12]];
+ const ip=r.rawRequest?.ip;
+ if(ip)limits.push([quotas.doc(hash("nomination-lookup-ip:"+ip+":"+hour)),120]);
+ await db.runTransaction(async tx=>{
+  const snaps=await Promise.all(limits.map(([ref])=>tx.get(ref)));
+  for(const [i,[ref,max]] of limits.entries()){
+   const count=Number(snaps[i].get("count")||0);
+   if(count>=max)throw new HttpsError("resource-exhausted","Too many name checks. Please try again later.");
+   tx.set(ref,{count:count+1,updatedAt:stamp()},{merge:true});
+  }
+ });
+ return {found:(await findNominations(name)).length>0};
+});
+exports.requestNominationConnection=onCall(opts,async r=>{
+ requireAuth(r);
+ const email=mail(r.auth.token.email);
+ if(r.auth.token.email_verified!==true||!email)throw new HttpsError("failed-precondition","Verify your Beacon account email first.");
+ const name=str(r.data?.studentName,120),school=str(r.data?.school,160),grade=str(r.data?.grade,4);
+ if(name.length<3||school.length<2||!["9","10","11","12"].includes(grade))err("Provide your full name, school and grade.");
+ const matches=await findNominations(name);
+ if(matches.some(doc=>doc.get("applicantUid")===r.auth.uid))return {linked:true};
+ if(!matches.some(doc=>!doc.get("applicantUid")))
+  throw new HttpsError("failed-precondition","Beacon could not accept a new connection for this name. Check My Dashboard or contact Beacon for help.");
+ const ref=nominationRequestRef(r.auth.uid),nameKey=nominationNameKey(name);
+ await db.runTransaction(async tx=>{
+  const prior=await tx.get(ref);
+  if(prior.get("approvedAt")){
+   if(prior.get("nameKey")!==nameKey)throw new HttpsError("failed-precondition","This account is already connected to a student record. Contact Beacon to correct it.");
+   return;
+  }
+  tx.set(ref,{nameKey,studentName:name,school,grade,applicantUid:r.auth.uid,accountEmail:email,requestedAt:stamp()});
+ });
+ return {pending:true};
+});
+exports.processStudentAccount=onCall(opts,async r=>{
+ staff(r);
+ const id=str(r.data?.entryId,140),mode=str(r.data?.mode,20),requestId=str(r.data?.requestId,100);
+ if(!id||id.includes("/")||!["confirm","link","advance"].includes(mode)||(mode==="link"&&!/^[a-f0-9]{64}$/.test(requestId)))
+  err("Choose a student account action.");
+ const entry=db.collection("entries").doc(id);
+ const request=mode==="link"?db.collection("nominationAccountRequests").doc(requestId):null;
+ return db.runTransaction(async tx=>{
+  const [record,recusal,claim]=await Promise.all([tx.get(entry),tx.get(entry.collection("recusals").doc(r.auth.uid)),request?tx.get(request):null]);
+  if(!record.exists||entryClosed(record.get("status")))throw new HttpsError("failed-precondition","This entry is unavailable for account processing.");
+  if(recusal.exists)throw new HttpsError("permission-denied","You recused yourself from this entry.");
+  const current=record.data(),processing=entryProcessing(current.status);
+  if(current.applicantUid===r.auth.uid)throw new HttpsError("permission-denied","Ask another committee member to process your student account.");
+  if(mode==="advance"){
+   if(!processing||!current.applicantUid||!current.accountConfirmedAt||needsNominationFollowUp(current))
+    throw new HttpsError("failed-precondition","Confirm the student account and complete any nomination follow-up before eligibility screening.");
+   tx.update(entry,{status:"screening",verifiedEligibility:false,lastUpdatedAt:stamp()});
+  }else{
+   if(mode==="confirm"&&!processing)throw new HttpsError("failed-precondition","Only entries in Processing need account confirmation.");
+   let uid=current.applicantUid;
+   const changes={accountConfirmedAt:stamp(),lastUpdatedAt:stamp()};
+   if(mode==="link"){
+    if(current.type!=="nomination"||!claim?.exists||claim.get("nameKey")!==nominationNameKey(current.studentName,current.cycle||cycle))
+     throw new HttpsError("failed-precondition","This connection request no longer matches the student record.");
+    const requestedUid=claim.get("applicantUid");
+    if(uid&&uid!==requestedUid)throw new HttpsError("already-exists","Another student account is already linked.");
+    uid=requestedUid;
+    Object.assign(changes,{applicantUid:uid,applicantEmail:claim.get("accountEmail")});
+   }
+   if(!uid)throw new HttpsError("failed-precondition","Wait for the student to request an account connection.");
+   if(uid===r.auth.uid)throw new HttpsError("permission-denied","Ask another committee member to confirm your student account.");
+   if(request)tx.update(request,{approvedAt:stamp()});
+   tx.update(entry,changes);
+  }
+  tx.create(db.collection("auditLogs").doc(),{action:"entry_account_"+mode,entryId:id,actorUid:r.auth.uid,at:stamp()});
+  return {ok:true};
+ });
+});
+
 exports.getMyEntries=onCall(opts,async r=>{
  requireAuth(r);
- const q=await db.collection("entries").where("applicantUid","==",r.auth.uid).limit(30).get();
- return {entries:q.docs.map(s=>safeSummary(s.data(),s.id))};
+ const [q,request]=await Promise.all([
+  db.collection("entries").where("applicantUid","==",r.auth.uid).limit(30).get(),nominationRequestRef(r.auth.uid).get()
+ ]);
+ const linked=q.docs.some(doc=>doc.get("type")==="nomination"&&nominationNameKey(doc.get("studentName"),doc.get("cycle")||cycle)===request.get("nameKey"));
+ return {entries:q.docs.map(s=>safeSummary(s.data(),s.id)),nominationConnection:request.exists?{
+  studentName:request.get("studentName"),pending:!request.get("approvedAt")&&!linked
+ }:null};
 });
 exports.getMyEntry=onCall(opts,async r=>{
  requireAuth(r);
@@ -429,7 +531,7 @@ exports.listReviewQueue=onCall(opts,async r=>{
    ...(settings?{nominationDelivery:nominationDelivery(entry)}:{})}];
  });
  return {entries,nextCursor:q.size>80?page.at(-1).id:null,
-  intake:settings?intakeSettings(settings):null,personalReviewQueue:true
+  intake:settings?intakeSettings(settings):null,personalReviewQueue:true,accountProcessing:true
  };
 });
 exports.getReviewEntry=onCall(opts,async r=>{
@@ -448,6 +550,10 @@ exports.getReviewEntry=onCall(opts,async r=>{
  const mine=votes.docs.find(vote=>vote.id===r.auth.uid)?.data()||null;
  const approvals=votes.docs.filter(vote=>vote.get("recommend")==="select").length;
  const manage=isAdmin(r);
+ const candidates=!entryClosed(d.status)&&d.type==="nomination"&&!d.applicantUid
+  ?(await db.collection("nominationAccountRequests").where("nameKey","==",nominationNameKey(d.studentName,d.cycle||cycle)).limit(50).get()).docs
+    .map(doc=>({requestId:doc.id,studentName:doc.get("studentName"),school:doc.get("school"),grade:doc.get("grade")}))
+  :[];
  const roster=manage&&d.status==="finalist"&&d.cycle===cycle
   ?await db.collection("entries").where("status","==","selected").where("cycle","==",cycle).limit(2).get():null;
  const decisionReadiness=manage&&!entryClosed(d.status)?{
@@ -462,7 +568,11 @@ exports.getReviewEntry=onCall(opts,async r=>{
    service:d.service,futureGoals:d.futureGoals,responsibilities:d.responsibilities,
    honors:d.honors,additionalInfo:d.additionalInfo,
    referenceStatus:d.referenceStatus,referenceCount:d.referenceCount||0,
-   nominationFollowUpNeeded:!!d.entryKeyHash&&!d.nominationFollowUp?.requestedAt,
+   nominationFollowUpNeeded:needsNominationFollowUp(d),
+   accountProcessing:{
+    processing:entryProcessing(d.status),linked:!!d.applicantUid,confirmed:!!d.accountConfirmedAt,
+    candidates
+   },
    referenceSuggestions:isAdmin(r)?d.references||[]:[],
    duplicateCount:duplicates?.size||0,
    nominator:isAdmin(r)&&d.privacy!=="anonymous"?d.nominator:null,
@@ -494,7 +604,7 @@ exports.getReviewEntry=onCall(opts,async r=>{
    guardianStatus:d.ageBand==="adult"?"not_required":d.guardianStatus||"pending",
    founderNote:isAdmin(r)?d.founderNote||"":"",
    nominationLetter:isAdmin(r)?{
-    keyIssued:!!d.entryKeyHash,needsEntryKey:d.type==="nomination"&&!d.applicantUid&&!entryClosed(d.status),
+    nameLookup:true,keyIssued:!!d.entryKeyHash,needsEntryKey:false,
     followUpRequested:d.nominationFollowUp?.requestedAt?.toDate?.()?.toISOString?.()||null,
     formsQueued:d.nominationFollowUp?.formsQueued===true,
     delivery:nominationDelivery(d),nominatorHandoff:d.nominationHandoff===true,
@@ -531,7 +641,7 @@ exports.recordReview=onCall(opts,async r=>{
   const [snap,recused,existingReviews]=await Promise.all([tx.get(ref),tx.get(recusal),tx.get(ref.collection("reviews"))]);
   if(!snap.exists)throw new HttpsError("not-found","Entry not found.");
   if(recused.exists)throw new HttpsError("permission-denied","You are recused.");
-  if(entryClosed(snap.get("status")))throw new HttpsError("failed-precondition","Entry is not open for review.");
+  if(entryClosed(snap.get("status"))||entryProcessing(snap.get("status")))throw new HttpsError("failed-precondition","Complete Processing before starting evaluations.");
   if(existingReviews.size>=5&&!existingReviews.docs.some(x=>x.id===r.auth.uid))
    throw new HttpsError("failed-precondition","The committee already has five reviews.");
   tx.set(review,{uid:r.auth.uid,scores:out,total:Object.values(out).reduce((a,b)=>a+b,0),
@@ -541,11 +651,11 @@ exports.recordReview=onCall(opts,async r=>{
  });
  return {ok:true};
 });
-const reviewStages=["submitted","screening","under_review","finalist"];
+const reviewStages=["processing","screening","under_review","finalist"];
 function selectionRequirements(entry){
  const pending=[];
- if(entry.entryKeyHash&&!entry.nominationFollowUp?.requestedAt)
-  pending.push({code:"follow_up",message:"The nominee must connect their Entry Key and submit their follow-up details first."});
+ if(needsNominationFollowUp(entry))
+  pending.push({code:"follow_up",message:"The nominee must submit their follow-up details first."});
  if(!entry.verifiedEligibility)
   pending.push({code:"eligibility",message:"Eligibility must be verified first."});
  if((entry.referenceCount||0)<2)
@@ -560,6 +670,7 @@ function requireSelectionRequirements(entry){
 }
 function decisionBlockers(entry,decision,votes,mine,method=votes.size<3?"founder":"committee"){
  const reasons=decision==="select"?selectionRequirements(entry).map(item=>item.message):[];
+ if(entryProcessing(entry.status))reasons.push("Complete account processing before recording a decision.");
  if(decision==="select"&&entry.status!=="finalist")reasons.unshift("Advance this student to Finalist before selecting a Beacon Scholar.");
  if(decision==="decline"&&!entry.verifiedEligibility)reasons.push("Eligibility must be verified first.");
  if(method==="founder"){
@@ -586,8 +697,8 @@ exports.setEligibility=onCall(opts,async r=>{
   if(entryClosed(s.get("status")))throw new HttpsError("failed-precondition","Entry is no longer open for decisions.");
   if(r.data?.fromStatus&&r.data.fromStatus!==s.get("status"))
    throw new HttpsError("failed-precondition","The stage changed. Reload the selection file and try again.");
-  if(eligible&&r.data?.fromStatus==="submitted")
-   throw new HttpsError("failed-precondition","Start eligibility screening first.");
+  if(entryProcessing(s.get("status")))
+   throw new HttpsError("failed-precondition","Complete account processing before eligibility screening.");
   if(eligible&&(!Number.isFinite(s.get("gpa"))||s.get("gpa")<2.5))
    throw new HttpsError("failed-precondition","Verify an unweighted GPA of at least 2.5 before approving eligibility.");
   const status=s.get("status"),notes=str(r.data?.notes,1000);
@@ -614,6 +725,7 @@ exports.moveSelectionStage=onCall(opts,async r=>{
   const finalized=from==="selected"||from==="not_selected";
   const formerStage=from==="selected"?"finalist":
    reviewStages.includes(entry.decisionFromStatus)?entry.decisionFromStatus:entry.verifiedEligibility?"under_review":"screening";
+  if(entryProcessing(from))throw new HttpsError("failed-precondition","Use the student account panel to complete Processing.");
   const step=reviewStages.indexOf(to)-reviewStages.indexOf(from);
   if(finalized){
    if(to!==formerStage)err("Reopen the entry at its previous review stage.");
@@ -627,7 +739,7 @@ exports.moveSelectionStage=onCall(opts,async r=>{
   const changes={status:to,lastUpdatedAt:stamp()};
   if(to==="finalist")changes.finalistAt=entry.finalistAt||stamp();
   if(to!=="finalist")changes.finalistAt=null;
-  if(to==="screening"||to==="submitted")changes.verifiedEligibility=false;
+  if(to==="screening"||to==="processing")changes.verifiedEligibility=false;
   if(finalized)Object.assign(changes,{decision:null,decisionMethod:null,decisionFromStatus:null,
    decidedBy:null,selectedAt:null,publicId:null,scholarAccepted:false,publicityConsent:false});
   if(from==="selected"){
@@ -649,6 +761,7 @@ exports.createInvitation=onCall(opts,async r=>{
  const ref=db.collection("entries").doc(entryId),s=await ref.get();
  if(!s.exists)throw new HttpsError("not-found","Entry not found.");
  const d=s.data();
+ if(kind==="scholar"&&d.status!=="selected")throw new HttpsError("failed-precondition","Students connect their nominations by name before selection.");
  if(["merged","withdrawn"].includes(d.status)||(kind!=="scholar"&&["selected","not_selected"].includes(d.status)))throw new HttpsError("failed-precondition","Entry is not accepting this invitation.");
  const recipient=kind==="guardian"?{name:d.guardianName||"Guardian",email:d.guardianEmail}:
   kind==="scholar"?{name:d.studentName,email:d.applicantEmail}:{...(d.references||[])[slot]};
@@ -664,6 +777,7 @@ exports.createInvitation=onCall(opts,async r=>{
   const record=fresh.data();
   const currentEmail=kind==="guardian"?record?.guardianEmail:kind==="scholar"?record?.applicantEmail:record?.references?.[slot]?.email;
   if(!record||currentEmail!==recipient.email||["merged","withdrawn"].includes(record.status)||
+     (kind==="scholar"&&record.status!=="selected")||
      (kind!=="scholar"&&entryClosed(record.status))||
      (kind==="guardian"&&(record.ageBand==="adult"||record.guardianStatus==="verified")))
    throw new HttpsError("failed-precondition","The entry changed. Reopen the selection file and try again.");
@@ -857,6 +971,7 @@ exports.updateEntryContacts=onCall(opts,async r=>{
  }
  if(["studentName","school","grade","graduationYear"].some(k=>k in changes&&changes[k]!==original[k])){
   changes.duplicateKey=dedupe({...original,...changes});
+  if(original.type==="nomination")changes.nominationNameKey=nominationNameKey(changes.studentName??original.studentName,original.cycle||cycle);
   changes.verifiedEligibility=false;
  }
 
@@ -932,25 +1047,7 @@ exports.useVerifiedNominatorReference=onCall(opts,async r=>{
 });
 exports.createNominationKey=onCall(opts,async r=>{
  owner(r);
- const entryId=str(r.data?.entryId,140);
- if(!entryId||entryId.includes("/"))err("Choose a nomination.");
- const entry=db.collection("entries").doc(entryId);
- const token=crypto.randomBytes(16).toString("hex").toUpperCase();
- const key=keyRef(token),expires=Date.now()+30*86400000;
- await db.runTransaction(async tx=>{
-  const snapshot=await tx.get(entry);
-  if(!snapshot.exists||snapshot.get("type")!=="nomination"||entryClosed(snapshot.get("status"))||snapshot.get("applicantUid"))
-   throw new HttpsError("failed-precondition","This nomination is no longer waiting to be connected.");
-  const oldKey=snapshot.get("entryKeyHash");
-  if(oldKey&&r.data?.replace!==true&&snapshot.get("entryKeyExpiresAt")?.toMillis()>Date.now())
-   throw new HttpsError("failed-precondition","An Entry Key already exists. Reopen this selection file before issuing a replacement.");
-  const expiresAt=admin.firestore.Timestamp.fromMillis(expires);
-  tx.create(key,{entryId,expiresAt});
-  tx.update(entry,{entryKeyHash:key.id,entryKeyExpiresAt:expiresAt,lastUpdatedAt:stamp()});
-  if(oldKey)tx.delete(db.collection("nominationKeys").doc(oldKey));
-  tx.create(db.collection("auditLogs").doc(),{action:"nomination_key_issued",entryId,actorUid:r.auth.uid,at:stamp()});
- });
- return {key:token.match(/.{4}/g).join("-"),expiresAt:new Date(expires).toISOString()};
+ throw new HttpsError("failed-precondition","New nomination letters use the name lookup on Beacon.");
 });
 async function claimEntryKey(r){
  const token=str(r.data?.entryKey,80).replace(/[\s-]/g,"").toUpperCase();
