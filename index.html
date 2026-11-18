@@ -7,7 +7,7 @@
   <meta name="description" content="Beacon Scholars honors high school students for their character and the good they do in their communities. Apply, nominate a student, or continue a nomination.">
   <title>Beacon Scholars | The Prayer Project</title>
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="styles.css"><link rel="stylesheet" href="beacon-theme.css?v=committee-csv-import-20261117">
+  <link rel="stylesheet" href="styles.css"><link rel="stylesheet" href="beacon-theme.css?v=nomination-discovery-20261118">
 </head>
 <body>
 <a class="skip-link" href="#main">Skip to content</a>
@@ -17,7 +17,7 @@
     <button class="menu-toggle" id="menu-toggle" type="button" aria-label="Toggle navigation" aria-expanded="false">☰</button>
     <nav id="main-nav" aria-label="Main navigation">
       <a href="#home">Home</a><a href="#mission">About</a><a href="#selection">Selection</a><a href="#recognition">Recognition</a><a href="#faq">FAQ</a>
-      <a href="#apply">Apply</a><a href="#nominate" class="nav-emphasis">Nominate</a><a href="#dashboard">Dashboard</a><a href="#account" class="nav-account" id="account-link">Sign in</a>
+      <a href="#apply">Apply</a><a href="#nominate">Nominate</a><a href="#find-nomination" class="nav-find">Check nomination</a><a href="#dashboard">Dashboard</a><a href="#account" class="nav-account" id="account-link">Sign in</a>
     </nav>
   </div>
 </header>
@@ -33,7 +33,15 @@
         <a class="btn btn-gold" href="#nominate">Nominate a student</a>
         <a class="btn btn-outline" href="#apply">Apply for recognition</a>
       </div>
-      <p class="home-claim">Think you were nominated? <a href="#find-nomination">Check for a nomination</a></p>
+      <aside class="nomination-discovery" aria-labelledby="nomination-discovery-heading">
+        <div class="nomination-discovery-mark" aria-hidden="true">✦</div>
+        <div class="nomination-discovery-copy">
+          <span class="nomination-discovery-eyebrow">FOR STUDENTS</span>
+          <h2 id="nomination-discovery-heading">Think you've been <em>nominated?</em></h2>
+          <p>Someone may have recognized your character and potential. Search by your name to see whether Beacon has received a nomination.</p>
+        </div>
+        <a href="#find-nomination" class="btn nomination-discovery-action">Check for my nomination <span aria-hidden="true">→</span></a>
+      </aside>
       <p class="intake-status" id="public-intake-status" role="status">Checking availability for applications and nominations…</p>
       <p class="deadline-note" data-intake-deadline hidden></p>
     </div>
@@ -422,11 +430,11 @@
 <section id="verify-view" class="view-page wrap workspace-view narrow" hidden><a href="#home" class="back-link">← Home</a><div class="section-kicker">OFFICIAL VERIFICATION</div><h1>Verify a Beacon <em>Scholar.</em></h1><div class="account-card"><p>Check whether a Scholar ID represents an approved Beacon Scholars recognition. Scholar names remain private unless their own publicity permissions allow display.</p><form id="verify-form"><label>Beacon Scholar ID <input name="publicId" maxlength="50" required placeholder="BCN-2027-XXXXXXXX"></label><button type="submit" class="btn btn-gold">Check recognition</button></form><div id="verification-result" aria-live="polite"></div></div></section>
 <section id="find-nomination-view" class="view-page wrap workspace-view" hidden>
  <a href="#home" class="back-link">← Beacon Scholars</a>
- <header class="workspace-heading"><h1>Check for a nomination</h1><p>Enter your full name as it would appear on your nomination.</p></header>
+ <header class="workspace-heading"><div class="section-kicker">NOMINATION DISCOVERY</div><h1>Have you been <em>nominated?</em></h1><p>Enter your full name to check for a Beacon nomination. If one is found, you can create or sign in to your own Beacon account. A committee member confirms the connection before you can view the nomination.</p></header>
  <div class="workspace-card">
   <p id="nomination-lookup-unavailable">Name lookup is currently unavailable. <a href="#claim">Use an Entry Key from an earlier letter</a>.</p>
   <form id="nomination-lookup-form" class="entry-form" hidden>
-   <label>First and last name <input name="studentName" autocomplete="name" minlength="3" maxlength="120" required></label>
+   <label>First and last name <input name="studentName" autocomplete="name" minlength="3" maxlength="120" placeholder="First and last name" required></label>
    <button type="submit" class="btn btn-gold">Check for a nomination</button>
   </form>
   <p id="nomination-lookup-result" role="status" hidden></p>
@@ -470,6 +478,6 @@
 </main>
 <footer class="site-footer"><div class="wrap footer-inner"><div><a class="brand" href="#home"><span class="brand-icon">✦</span><span class="brand-words"><strong>BEACON</strong><small>SCHOLARS</small></span></a><small>An initiative of <a href="https://ask4prayers.com/">The Prayer Project</a></small></div><div class="footer-links"><a href="#mission">About</a><a href="#selection">Selection</a><a href="#recognition">Recognition</a><a href="#faq">FAQ</a><a href="#verify">Verify a Scholar ID</a><a href="#apply">Apply</a><a href="#nominate">Nominate</a><a href="#policy">Privacy notice</a><a href="#committee">Committee</a></div></div><div class="wrap footer-bottom">© <span id="year"></span> The Prayer Project. Beacon Scholars is a recognition initiative.</div></footer>
 <div id="print-document" hidden></div>
-<script type="module" src="app.js?v=nomination-processing-20261117"></script>
+<script type="module" src="app.js?v=historical-account-processing-20261118"></script>
 </body>
 </html>
