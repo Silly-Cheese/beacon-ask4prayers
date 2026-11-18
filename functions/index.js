@@ -467,8 +467,8 @@ exports.processStudentAccount=onCall(opts,async r=>{
    throw new HttpsError("permission-denied","An administrator must approve account connections on finalized entries.");
   if(recusal.exists)throw new HttpsError("permission-denied","You recused yourself from this entry.");
   const current=record.data(),processing=entryProcessing(current.status);
-  if(current.applicantUid===r.auth.uid)
-   throw new HttpsError("permission-denied","Ask another committee member to process your own student account.");
+  if(current.applicantUid===r.auth.uid&&!isAdmin(r))
+   throw new HttpsError("permission-denied","Ask an administrator or another committee member to process your own student account.");
   let linkedUid=current.applicantUid;
   if(mode==="advance"){
    if(!processing||!linkedUid||!current.accountConfirmedAt||needsNominationFollowUp(current))
@@ -502,8 +502,8 @@ exports.processStudentAccount=onCall(opts,async r=>{
     throw new HttpsError("failed-precondition","Wait for the student to request a connection or select an existing student application.");
    if(current.applicantUid&&current.applicantUid!==linkedUid)
     throw new HttpsError("already-exists","A different student account is already linked. Investigate before changing it.");
-   if(linkedUid===r.auth.uid)
-    throw new HttpsError("permission-denied","Ask another committee member to confirm your own student account.");
+   if(linkedUid===r.auth.uid&&!isAdmin(r))
+    throw new HttpsError("permission-denied","Ask an administrator or another committee member to confirm your own student account.");
    if(request)tx.update(request,{approvedAt:stamp(),approvedEntryId:id});
    tx.update(entry,changes);
   }
