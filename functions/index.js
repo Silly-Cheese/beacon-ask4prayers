@@ -463,6 +463,8 @@ exports.processStudentAccount=onCall(opts,async r=>{
   ]);
   if(!record.exists||["merged","withdrawn"].includes(record.get("status")))
    throw new HttpsError("failed-precondition","This entry is unavailable for account processing.");
+  if(["selected","not_selected"].includes(record.get("status"))&&!isAdmin(r))
+   throw new HttpsError("permission-denied","An administrator must approve account connections on finalized entries.");
   if(recusal.exists)throw new HttpsError("permission-denied","You recused yourself from this entry.");
   const current=record.data(),processing=entryProcessing(current.status);
   if(current.applicantUid===r.auth.uid)
