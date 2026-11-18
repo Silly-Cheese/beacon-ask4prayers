@@ -1,6 +1,6 @@
 import {auth,callable} from "./beacon-firebase.js";
 import {
-  onAuthStateChanged,signInWithEmailAndPassword,createUserWithEmailAndPassword,
+  onAuthStateChanged,onIdTokenChanged,signInWithEmailAndPassword,createUserWithEmailAndPassword,
   signInAnonymously,signOut,sendEmailVerification,sendPasswordResetEmail,reload
 } from "https://www.gstatic.com/firebasejs/13.1.0/firebase-auth.js";
 const $=id=>document.getElementById(id),qs=(s,root=document)=>root.querySelector(s),qsa=(s,root=document)=>[...root.querySelectorAll(s)];
@@ -402,11 +402,26 @@ const nominationAddressError="Enter a street address or P.O. box, city, state an
 const nomForm=$("nomination-form");
 $("nomination-postal").append($("nomination-postal-fields").content.cloneNode(true));
 const nominationDeliveryError=$("nomination-delivery-error");
+let nominationAdminUid=null;
+function refreshNominationDeferral(){
+ const allowed=settings?.nominationDeliveryDeferral===true&&!!nominationAdminUid&&currentUser?.uid===nominationAdminUid;
+ $("nomination-delivery-deferral").hidden=!allowed;
+ const control=nomForm.elements.deferNominationDelivery;
+ control.disabled=!allowed;
+ if(!allowed)control.checked=false;
+}
+onIdTokenChanged(auth,async user=>{
+ const token=user&&!user.isAnonymous?await user.getIdTokenResult().catch(()=>null):null;
+ if(auth.currentUser!==user)return;
+ nominationAdminUid=token?.claims.admin===true&&token.claims.email_verified===true?user.uid:null;
+ refreshNominationDeferral();
+});
 nomForm.addEventListener("input",()=>{
  if(!nominationBusy)nominationRequestId=null;
  nominationDeliveryError.hidden=true;
 });
 function nominationPrivacy(){
+ refreshNominationDeferral();
  const privacy=qs('input[name="privacy"]:checked',nomForm)?.value;
  const anonymous=privacy==="anonymous",signed=accountNeeded();
  $("nominator-identity").hidden=anonymous;
@@ -437,6 +452,7 @@ nomForm.addEventListener("submit",async e=>{
  }
  const d=new FormData(nomForm),get=x=>String(d.get(x)||"").trim();
  const privacy=get("privacy"),nominationHandoff=get("nominationHandoff")==="on";
+ const deferNominationDelivery=get("deferNominationDelivery")==="on";
  const postalEnabled=settings?.nominationPostalDelivery===true;
  const address=postalEnabled?readNominationAddress(get):null;
  if(!validNominationAddress(address)){
@@ -446,7 +462,7 @@ nomForm.addEventListener("submit",async e=>{
   nomForm.elements[postalField("line1")].focus();
   return;
  }
- if(!get("applicantEmail")&&!get("guardianEmail")&&!address&&!nominationHandoff){
+ if(!get("applicantEmail")&&!get("guardianEmail")&&!address&&!nominationHandoff&&!deferNominationDelivery){
   const contact=postalEnabled?"student or guardian email or mailing address":"student or guardian email";
   nominationDeliveryError.textContent=privacy==="anonymous"
    ?"Enter a "+contact+" so we can deliver the letter."
@@ -472,7 +488,7 @@ nomForm.addEventListener("submit",async e=>{
   nominationRequestId||=crypto.randomUUID();
   const out=await call("submitEntry",{
    type:"nomination",privacy,fields,requestId:nominationRequestId,declaration:get("declaration")==="on",nominatorName:get("nominatorName"),
-   nominatorEmail,nominationHandoff,relationship:get("relationship"),message:get("message"),
+   nominatorEmail,nominationHandoff,deferNominationDelivery,relationship:get("relationship"),message:get("message"),
    ...(address?{nominationAddress:address}:{})
   });
   nominationRequestId=null;

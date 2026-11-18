@@ -28,7 +28,7 @@ function intakeSettings(snapshot){
  const parts=Object.fromEntries(centralDate.formatToParts(new Date()).map(({type,value})=>[type,value]));
  const deadlinePassed=!!intakeDeadline&&[parts.year,parts.month,parts.day].join("-")>intakeDeadline;
  return {cycle,intakeOpen:intakeManuallyOpen&&!deadlinePassed,intakeManuallyOpen,intakeDeadline,deadlinePassed,
-  honoraryOnly:true,brandedVerification:beaconMail.enabled(),nominationPostalDelivery:true};
+  honoraryOnly:true,brandedVerification:beaconMail.enabled(),nominationPostalDelivery:true,nominationDeliveryDeferral:true};
 }
 async function requireOpenIntake(tx){
  const settings=intakeSettings(await tx.get(intakeRef));
@@ -252,6 +252,7 @@ exports.submitEntry=onCall(opts,async r=>{
  const day=new Date().toISOString().slice(0,10);
  // A signed-in administrator can process multiple nominations. Public submissions keep the daily limit.
  const isVerifiedAdmin=isAdmin(r)&&r.auth.token.email_verified===true&&r.auth.token.firebase?.sign_in_provider!=="anonymous";
+ const deferDelivery=isVerifiedAdmin&&bool(r.data?.deferNominationDelivery);
  const quota=isVerifiedAdmin?null:db.collection("submissionQuotas").doc(hash(r.auth.uid+day));
  const entryId=await db.runTransaction(async tx=>{
   if(receipt){
@@ -260,7 +261,7 @@ exports.submitEntry=onCall(opts,async r=>{
   }
   await requireOpenIntake(tx);
   const address=nominationAddress(r.data?.nominationAddress);
-  if(!d.applicantEmail&&!d.guardianEmail&&!address&&!nominationHandoff)
+  if(!d.applicantEmail&&!d.guardianEmail&&!address&&!nominationHandoff&&!deferDelivery)
    err(privacy==="anonymous"?"Provide a student or guardian email or mailing address so Beacon can deliver the letter."
     :"Provide a student or guardian email or mailing address, or confirm you can deliver the letter privately.");
   if(quota){
