@@ -574,3 +574,137 @@ input::placeholder,textarea::placeholder{color:#938577}
 .committee-outcome h3 { font-size: 1rem; margin: 0; }
 .committee-outcome ul { margin: .35rem 0 .6rem; padding-left: 1.2rem; }
 .evaluation-total { display: block; color: var(--gold-strong); font-weight: 700; }
+
+
+/* A prominent, accessible path for students who may have been nominated */
+.site-header nav { gap:clamp(.65rem,1.45vw,1.25rem); }
+.site-header nav a { font-size:clamp(.72rem,.93vw,.82rem); }
+.site-header nav .nav-find {
+ display:inline-flex;
+ align-items:center;
+ justify-content:center;
+ padding:.65rem 1rem;
+ border-radius:999px;
+ background:var(--gold-strong);
+ border:1px solid var(--gold-strong);
+ color:#15100a;
+ font-weight:800;
+ box-shadow:0 4px 22px rgba(216,195,165,.19);
+}
+.site-header nav .nav-find:hover { color:#15100a; background:#fff1dc; }
+.nomination-discovery {
+ display:grid;
+ grid-template-columns:42px minmax(0,1fr);
+ gap:.65rem 1rem;
+ padding:1.3rem clamp(1rem,2.5vw,1.7rem);
+ margin:1.65rem 0 1.1rem;
+ border:1px solid #ffeed3;
+ border-radius:24px;
+ background:linear-gradient(140deg,#f9f0e3 0%,#e6d0b2 100%);
+ color:#1a140f;
+ box-shadow:0 16px 55px rgba(0,0,0,.29),inset 0 1px 0 #fffaf2;
+}
+.nomination-discovery-mark {
+ width:42px;
+ height:42px;
+ display:grid;
+ place-items:center;
+ border-radius:50%;
+ background:#241a10;
+ color:#f9e5bf;
+ font-size:1.65rem;
+ line-height:1;
+}
+.nomination-discovery-copy { min-width:0; }
+.nomination-discovery-eyebrow {
+ display:block;
+ margin:0 0 .22rem;
+ font-size:.67rem;
+ font-weight:900;
+ letter-spacing:.18em;
+ color:#6d4926;
+}
+#public-view .nomination-discovery h2 {
+ margin:0 0 .35rem;
+ color:#1a140f;
+ font-size:clamp(1.32rem,2.25vw,1.9rem);
+ line-height:1.2;
+ letter-spacing:-.025em;
+ text-wrap:balance;
+}
+#public-view .nomination-discovery h2 em { color:#68431f; font-style:normal; }
+.nomination-discovery p {
+ margin:0;
+ color:#4c3b2b;
+ font-size:.89rem;
+ line-height:1.55;
+}
+.nomination-discovery-action {
+ grid-column:2;
+ justify-self:start;
+ min-height:46px;
+ padding:.75rem 1.2rem;
+ border:1px solid #1c130d;
+ background:#1c130d;
+ color:#fff5e6;
+ text-align:center;
+ font-size:.79rem;
+ box-shadow:0 5px 15px rgba(32,24,15,.2);
+}
+.nomination-discovery-action:hover { background:#3a2b1e; color:#fff8ee; }
+#find-nomination-view .workspace-heading { max-width:52rem; }
+#find-nomination-view .workspace-card { max-width:48rem; }
+#nomination-lookup-result:not([hidden]) {
+ border-left:3px solid var(--gold-strong);
+ background:#1c1813;
+ border-radius:5px 14px 14px 5px;
+ padding:.85rem 1rem;
+}
+@media (max-width:900px) {
+ .site-header nav .nav-find { width:max-content; max-width:100%; }
+}
+@media (max-width:620px) {
+ .nomination-discovery { grid-template-columns:34px minmax(0,1fr); gap:.55rem .8rem; padding:1.1rem; margin-top:1.35rem; border-radius:18px; }
+ .nomination-discovery-mark { width:34px; height:34px; font-size:1.3rem; }
+ .nomination-discovery-action { grid-column:1/-1; width:100%; }
+ #public-view .nomination-discovery h2 { font-size:1.42rem; }
+ .nomination-discovery p { font-size:.82rem; }
+}
+
+/* Reconcile account links on existing and finalized selection files */
+.committee-account-banner {
+ display:flex;
+ justify-content:space-between;
+ align-items:center;
+ gap:1.2rem;
+ flex-wrap:wrap;
+ border:1px solid rgba(216,195,165,.45);
+ background:linear-gradient(120deg,#201a14,#100d0a);
+ border-radius:16px;
+ padding:1rem 1.1rem;
+ margin-bottom:1rem;
+}
+.committee-account-banner strong { color:var(--gold-strong); font-weight:800; }
+.committee-account-banner p { color:var(--muted); font-size:.87rem; line-height:1.6; margin:.24rem 0 0; max-width:44rem; }
+.committee-account-banner button { flex-shrink:0; }
+.committee-account-panel { border-color:rgba(216,195,165,.44); }
+.committee-account-panel > h2 { margin-bottom:.6rem; }
+.account-identity-check { display:grid; gap:.65rem; padding:1rem; margin:1rem 0; }
+.account-identity-check label { display:block; }
+.account-identity-check select, .account-identity-check textarea { max-width:100%; }
+.account-match-card {
+ display:grid;
+ gap:.5rem;
+ padding:1rem;
+ margin:.75rem 0;
+ border:1px solid var(--workspace-line);
+ border-radius:14px;
+ background:var(--workspace-inset);
+}
+.account-match-card .workspace-facts { margin:.25rem 0; }
+.account-match-card .btn { justify-self:start; }
+@media (max-width:680px) {
+ .committee-account-banner { padding:1rem; align-items:stretch; }
+ .committee-account-banner button, .account-match-card .btn { width:100%; }
+ .account-identity-check { padding:.8rem; }
+}
