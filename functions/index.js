@@ -49,7 +49,7 @@ const normalizedStudentName=value=>str(value,120).normalize("NFKC").replace(/\s+
 const nominationNameKey=(name,entryCycle=cycle)=>hash(entryCycle+":"+normalizedStudentName(name));
 const nominationRequestRef=uid=>db.collection("nominationAccountRequests").doc(hash(cycle+":"+uid));
 const needsNominationFollowUp=entry=>entry.type==="nomination"&&
- !!(entry.entryKeyHash||entry.accountConfirmedAt||entryProcessing(entry.status))&&!entry.nominationFollowUp?.requestedAt;
+ !!(entry.entryKeyHash||entryProcessing(entry.status)||(entry.accountConfirmedAt&&(entry.referenceCount||0)<2))&&!entry.nominationFollowUp?.requestedAt;
 
 const canReachNominator=entry=>entry.privacy!=="anonymous"&&!!entry.nominator?.email;
 function nominationAddress(value){
@@ -388,17 +388,21 @@ exports.importNominations=onCall({...opts,timeoutSeconds:120},async r=>{
   invalid:results.filter(item=>item.status==="invalid").length};
 });
 
-async function findNominations(name){
+function studentNameVariants(name){
  const normalized=normalizedStudentName(name);
  const titleCase=normalized.replace(/(^|[\s'-])\p{L}/gu,letter=>letter.toUpperCase());
- const names=[...new Set([str(name,120),normalized,titleCase,normalized.toUpperCase()])];
+ return [...new Set([str(name,120),normalized,titleCase,normalized.toUpperCase()])];
+}
+async function findNominations(name){
+ const normalized=normalizedStudentName(name);
+ const names=studentNameVariants(name);
  const entries=db.collection("entries");
  const [indexed,legacy]=await Promise.all([
   entries.where("nominationNameKey","==",nominationNameKey(name)).limit(50).get(),
   entries.where("studentName","in",names).limit(50).get()
  ]);
  return [...indexed.docs,...legacy.docs].filter(doc=>doc.get("type")==="nomination"&&
-  (doc.get("cycle")||cycle)===cycle&&!entryClosed(doc.get("status"))&&normalizedStudentName(doc.get("studentName"))===normalized);
+  (doc.get("cycle")||cycle)===cycle&&![ "merged","withdrawn" ].includes(doc.get("status"))&&normalizedStudentName(doc.get("studentName"))===normalized);
 }
 exports.findNominationByName=onCall(opts,async r=>{
  if(!r.auth?.uid)throw new HttpsError("unauthenticated","Open Beacon again to check for a nomination.");
@@ -441,43 +445,74 @@ exports.requestNominationConnection=onCall(opts,async r=>{
 });
 exports.processStudentAccount=onCall(opts,async r=>{
  staff(r);
- const id=str(r.data?.entryId,140),mode=str(r.data?.mode,20),requestId=str(r.data?.requestId,100);
- if(!id||id.includes("/")||!["confirm","link","advance"].includes(mode)||(mode==="link"&&!/^[a-f0-9]{64}$/.test(requestId)))
-  err("Choose a student account action.");
+ const id=str(r.data?.entryId,140),mode=str(r.data?.mode,20);
+ const requestId=str(r.data?.requestId,100),sourceEntryId=str(r.data?.sourceEntryId,140);
+ if(!id||id.includes("/")||!["confirm","link","link_existing","advance"].includes(mode))err("Choose a student account action.");
+ if(mode==="link"&&!/^[a-f0-9]{64}$/.test(requestId))err("Choose a valid name-lookup request.");
+ if(mode==="link_existing"&&(!sourceEntryId||sourceEntryId===id||sourceEntryId.includes("/")))err("Choose a different student entry.");
+ const method=str(r.data?.verificationMethod,40),notes=str(r.data?.verificationNotes,600);
+ if(mode!=="advance"&&(!["school","guardian","existing_records","other"].includes(method)||notes.length<12))
+  err("Independently confirm identity, choose how you verified it, and write at least 12 characters of verification notes.");
  const entry=db.collection("entries").doc(id);
  const request=mode==="link"?db.collection("nominationAccountRequests").doc(requestId):null;
+ const source=mode==="link_existing"?db.collection("entries").doc(sourceEntryId):null;
  return db.runTransaction(async tx=>{
-  const [record,recusal,claim]=await Promise.all([tx.get(entry),tx.get(entry.collection("recusals").doc(r.auth.uid)),request?tx.get(request):null]);
-  if(!record.exists||entryClosed(record.get("status")))throw new HttpsError("failed-precondition","This entry is unavailable for account processing.");
+  const [record,recusal,claim,sourceSnap]=await Promise.all([
+   tx.get(entry),tx.get(entry.collection("recusals").doc(r.auth.uid)),
+   request?tx.get(request):null,source?tx.get(source):null
+  ]);
+  if(!record.exists||["merged","withdrawn"].includes(record.get("status")))
+   throw new HttpsError("failed-precondition","This entry is unavailable for account processing.");
   if(recusal.exists)throw new HttpsError("permission-denied","You recused yourself from this entry.");
   const current=record.data(),processing=entryProcessing(current.status);
-  if(current.applicantUid===r.auth.uid)throw new HttpsError("permission-denied","Ask another committee member to process your student account.");
+  if(current.applicantUid===r.auth.uid)
+   throw new HttpsError("permission-denied","Ask another committee member to process your own student account.");
+  let linkedUid=current.applicantUid;
   if(mode==="advance"){
-   if(!processing||!current.applicantUid||!current.accountConfirmedAt||needsNominationFollowUp(current))
+   if(!processing||!linkedUid||!current.accountConfirmedAt||needsNominationFollowUp(current))
     throw new HttpsError("failed-precondition","Confirm the student account and complete any nomination follow-up before eligibility screening.");
-   tx.update(entry,{status:"screening",verifiedEligibility:false,lastUpdatedAt:stamp()});
+   const resume=reviewStages.includes(current.accountProcessingReturnStage)&&current.accountProcessingReturnStage!=="processing"
+    ?current.accountProcessingReturnStage:"screening";
+   tx.update(entry,{status:resume,accountProcessingReturnStage:admin.firestore.FieldValue.delete(),
+    lastUpdatedAt:stamp()});
   }else{
-   if(mode==="confirm"&&!processing)throw new HttpsError("failed-precondition","Only entries in Processing need account confirmation.");
-   let uid=current.applicantUid;
-   const changes={accountConfirmedAt:stamp(),lastUpdatedAt:stamp()};
+   const changes={accountConfirmedAt:stamp(),accountVerification:{
+    method,notes,verifiedBy:r.auth.uid,verifiedAt:stamp()
+   },lastUpdatedAt:stamp()};
+   if(mode==="confirm"&&!processing&&current.accountConfirmedAt)
+    throw new HttpsError("failed-precondition","This student's account is already confirmed.");
    if(mode==="link"){
     if(current.type!=="nomination"||!claim?.exists||claim.get("nameKey")!==nominationNameKey(current.studentName,current.cycle||cycle))
      throw new HttpsError("failed-precondition","This connection request no longer matches the student record.");
-    const requestedUid=claim.get("applicantUid");
-    if(uid&&uid!==requestedUid)throw new HttpsError("already-exists","Another student account is already linked.");
-    uid=requestedUid;
-    Object.assign(changes,{applicantUid:uid,applicantEmail:claim.get("accountEmail")});
+    linkedUid=claim.get("applicantUid");
+    if(!linkedUid)throw new HttpsError("failed-precondition","The account request is incomplete.");
+    Object.assign(changes,{applicantUid:linkedUid,applicantEmail:claim.get("accountEmail")});
+   }else if(mode==="link_existing"){
+    const known=sourceSnap?.data();
+    if(current.type!=="nomination"||!known?.applicantUid||!known.accountConfirmedAt&&known.type!=="self"||
+       (known.cycle||cycle)!==(current.cycle||cycle)||
+       normalizedStudentName(known.studentName)!==normalizedStudentName(current.studentName))
+     throw new HttpsError("failed-precondition","This existing application does not identify the same student. Check records before linking.");
+    linkedUid=known.applicantUid;
+    Object.assign(changes,{applicantUid:linkedUid,applicantEmail:mail(known.applicantEmail)});
    }
-   if(!uid)throw new HttpsError("failed-precondition","Wait for the student to request an account connection.");
-   if(uid===r.auth.uid)throw new HttpsError("permission-denied","Ask another committee member to confirm your student account.");
-   if(request)tx.update(request,{approvedAt:stamp()});
+   if(!linkedUid)
+    throw new HttpsError("failed-precondition","Wait for the student to request a connection or select an existing student application.");
+   if(current.applicantUid&&current.applicantUid!==linkedUid)
+    throw new HttpsError("already-exists","A different student account is already linked. Investigate before changing it.");
+   if(linkedUid===r.auth.uid)
+    throw new HttpsError("permission-denied","Ask another committee member to confirm your own student account.");
+   if(request)tx.update(request,{approvedAt:stamp(),approvedEntryId:id});
    tx.update(entry,changes);
   }
-  tx.create(db.collection("auditLogs").doc(),{action:"entry_account_"+mode,entryId:id,actorUid:r.auth.uid,at:stamp()});
+  tx.create(db.collection("auditLogs").doc(),{
+   action:"entry_account_"+mode,entryId:id,actorUid:r.auth.uid,at:stamp(),
+   ...(mode==="advance"?{}:{verificationMethod:method,verificationNotes:notes}),
+   ...(source?{sourceEntryId}:{})
+  });
   return {ok:true};
  });
 });
-
 exports.getMyEntries=onCall(opts,async r=>{
  requireAuth(r);
  const [q,request]=await Promise.all([
@@ -528,6 +563,8 @@ exports.listReviewQueue=onCall(opts,async r=>{
   const entry=doc.data();
   return [{...safeSummary(entry,doc.id),school:entry.school||"",myReviewSaved:reviewedIds.has(doc.id),
    requirementsPending:selectionRequirements(entry).length,
+   accountConnectionNeeded:!entry.accountConfirmedAt&&![ "merged","withdrawn" ].includes(entry.status),
+   accountLinked:!!entry.applicantUid,
    ...(settings?{nominationDelivery:nominationDelivery(entry)}:{})}];
  });
  return {entries,nextCursor:q.size>80?page.at(-1).id:null,
@@ -550,10 +587,20 @@ exports.getReviewEntry=onCall(opts,async r=>{
  const mine=votes.docs.find(vote=>vote.id===r.auth.uid)?.data()||null;
  const approvals=votes.docs.filter(vote=>vote.get("recommend")==="select").length;
  const manage=isAdmin(r);
- const candidates=!entryClosed(d.status)&&d.type==="nomination"&&!d.applicantUid
-  ?(await db.collection("nominationAccountRequests").where("nameKey","==",nominationNameKey(d.studentName,d.cycle||cycle)).limit(50).get()).docs
-    .map(doc=>({requestId:doc.id,studentName:doc.get("studentName"),school:doc.get("school"),grade:doc.get("grade")}))
-  :[];
+ const needsConnection=d.type==="nomination"&&!d.applicantUid&&!["merged","withdrawn"].includes(d.status);
+ const [accountRequests,olderAccounts]=needsConnection?await Promise.all([
+  db.collection("nominationAccountRequests").where("nameKey","==",nominationNameKey(d.studentName,d.cycle||cycle)).limit(50).get(),
+  db.collection("entries").where("studentName","in",studentNameVariants(d.studentName)).limit(50).get()
+ ]):[null,null];
+ const candidates=accountRequests?.docs.map(doc=>({
+  requestId:doc.id,studentName:doc.get("studentName"),school:doc.get("school"),grade:doc.get("grade")
+ }))||[];
+ const existingAccounts=(olderAccounts?.docs||[]).filter(other=>other.id!==id&&
+  (other.get("cycle")||cycle)===(d.cycle||cycle)&&!!other.get("applicantUid")&&
+  normalizedStudentName(other.get("studentName"))===normalizedStudentName(d.studentName)&&
+  (other.get("type")==="self"||!!other.get("accountConfirmedAt")))
+  .map(other=>({sourceEntryId:other.id,school:other.get("school")||"",
+    grade:other.get("grade")||"",type:other.get("type")||"self",status:other.get("status")||"submitted"}));
  const roster=manage&&d.status==="finalist"&&d.cycle===cycle
   ?await db.collection("entries").where("status","==","selected").where("cycle","==",cycle).limit(2).get():null;
  const decisionReadiness=manage&&!entryClosed(d.status)?{
@@ -571,7 +618,7 @@ exports.getReviewEntry=onCall(opts,async r=>{
    nominationFollowUpNeeded:needsNominationFollowUp(d),
    accountProcessing:{
     processing:entryProcessing(d.status),linked:!!d.applicantUid,confirmed:!!d.accountConfirmedAt,
-    candidates
+    legacy:!entryProcessing(d.status),candidates,existingAccounts
    },
    referenceSuggestions:isAdmin(r)?d.references||[]:[],
    duplicateCount:duplicates?.size||0,
