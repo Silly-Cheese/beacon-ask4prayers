@@ -1337,6 +1337,15 @@ async function showCommittee(focusQueue=false){
   while(cursor&&pages<queuePages&&stillHere())await nextPage();
   if(!stillHere())return;
   const queue=workspaceCard("Selection queue");
+  const connectionHelp=el("div",undefined,"committee-account-banner");
+  const connectionDescription=el("div");
+  connectionDescription.append(el("strong","New and previous entries can be processed."),
+   el("p","Connect nominees to existing student accounts or approve new requests. Older screening, review and final-decision records keep their original status and evaluations."));
+  const connectionButton=el("button","Show entries needing account processing","btn btn-outline");
+  connectionButton.type="button";
+  connectionButton.onclick=()=>{queueWork="account_connection";work.value=queueWork;render();};
+  connectionHelp.append(connectionDescription,connectionButton);
+  queue.append(connectionHelp);
   const stageTabs=el("div",undefined,"committee-stages");
   stageTabs.setAttribute("role","group");
   stageTabs.setAttribute("aria-label","Selection stage");
@@ -1362,7 +1371,7 @@ async function showCommittee(focusQueue=false){
   const workField=el("label","Review and follow-up");
   const work=el("select");
   for(const [control,options] of [[type,[["all","All entry types"],["self","Applications"],["nomination","Nominations"]]],
-   [work,[["all","All review activity"],["needs_review","Needs my evaluation"],["reviewed","I’ve evaluated"],["follow_up","Requirements pending"],
+   [work,[["all","All review activity"],["account_connection","Needs account processing (new and older)"],["needs_review","Needs my evaluation"],["reviewed","I’ve evaluated"],["follow_up","Requirements pending"],
     ...(result.intake?[["letter_contact","Needs letter delivery route"]]:[])]]]){
    for(const [value,label] of options){
     const option=el("option",label);option.value=value;control.append(option);
@@ -1379,6 +1388,7 @@ async function showCommittee(focusQueue=false){
    const term=queueSearch.trim().toLowerCase();
    const matching=entries.filter(item=>(queueType==="all"||item.type===queueType)&&
     (queueWork==="all"||(queueWork==="needs_review"&&!selectionFilesClosed(item.status)&&!item.myReviewSaved)||
+     (queueWork==="account_connection"&&item.accountConnectionNeeded)||
      (queueWork==="reviewed"&&item.myReviewSaved)||(queueWork==="follow_up"&&!selectionFilesClosed(item.status)&&item.requirementsPending>0)||
      (queueWork==="letter_contact"&&needsNominationDelivery(item.nominationDelivery)))&&
     [item.studentName,item.entryId,item.school||""].some(value=>value.toLowerCase().includes(term)));
@@ -1396,6 +1406,7 @@ async function showCommittee(focusQueue=false){
      const notes=[item.myReviewSaved?"Evaluation saved":!selectionFilesClosed(item.status)?"Your evaluation pending":""];
      if(!selectionFilesClosed(item.status)&&item.requirementsPending)
       notes.push(item.requirementsPending+" program requirement"+(item.requirementsPending===1?"":"s")+" pending");
+     if(item.accountConnectionNeeded)notes.push(item.accountLinked?"Account confirmation needed":"Student account not connected");
      if(needsNominationDelivery(item.nominationDelivery))notes.push("Needs letter delivery route");
      if(notes.some(Boolean))row.firstElementChild.append(el("p",notes.filter(Boolean).join(" · "),"committee-row-detail"));
     }
@@ -1498,33 +1509,89 @@ function renderSelectionStages(entry){
 
 function renderAccountProcessing(entry){
  const account=entry.accountProcessing;
- if(!account||selectionFilesClosed(entry.status)||(!account.processing&&account.linked))return null;
- const panel=workspaceCard("Student account");
- const button=(label,mode,requestId)=>{
+ if(!account||["merged","withdrawn"].includes(entry.status)||account.confirmed&&!account.processing)return null;
+ const panel=workspaceCard(account.legacy?"Account processing · existing record":"Account processing");
+ panel.classList.add("committee-account-panel");
+ const older=account.legacy;
+ if(older)panel.append(el("p","This entry was created before the Processing stage. You can connect or confirm its student account now without changing its selection status, existing reviews, or final decision.","callout"));
+ else panel.append(el("p","Confirm who owns this student account. The student can complete nomination follow-up only after their account is linked.","help"));
+ const confirmed=account.linked&&account.confirmed;
+ if(confirmed){
+  if(entry.nominationFollowUpNeeded){
+   panel.append(el("p","Account confirmed. Waiting for the student to complete outstanding nomination details in My Dashboard.","help"));
+  }else if(account.processing){
+   const advance=el("button","Finish Processing → Eligibility screening","btn btn-gold");
+   advance.type="button";advance.onclick=()=>action("processStudentAccount",{entryId:entry.entryId,mode:"advance"},entry.entryId);
+   panel.append(advance);
+  }
+  return panel;
+ }
+ const verify=el("div",undefined,"workspace-subsection account-identity-check");
+ verify.append(el("h3","Independent identity check"),
+  el("p","Do not approve a match using only the student's name, school or grade entered in the lookup. Confirm identity independently with an authorized school contact, guardian, or an existing verified record. Do not enter ID numbers or other sensitive documents here.","help"));
+ const methodLabel=el("label","How was the student's identity confirmed?");
+ const method=el("select");method.required=true;
+ for(const [value,label] of [["","Choose a verification method"],["school","Independent school confirmation"],["guardian","Parent/guardian confirmation"],["existing_records","Existing verified Beacon record"],["other","Other independently verified evidence"]]){
+  const option=el("option",label);option.value=value;method.append(option);
+ }
+ methodLabel.append(method);
+ const notesLabel=el("label","Brief verification notes (at least 12 characters)");
+ const notes=el("textarea");notes.rows=3;notes.maxLength=600;notes.minLength=12;notes.required=true;
+ notes.placeholder="Record how and when identity was confirmed, without recording sensitive documents.";
+ notesLabel.append(notes);verify.append(methodLabel,notesLabel);
+ panel.append(verify);
+ const button=(label,mode,detail={})=>{
   const control=el("button",label,"btn btn-gold");control.type="button";
   control.onclick=async()=>{
-   if(mode==="link"&&!confirm("Confirm that this account belongs to the student named in this entry?"))return;
+   if(!method.value||notes.value.trim().length<12){
+    notify("Choose an independent verification method and add notes of at least 12 characters.");
+    (!method.value?method:notes).focus();return;
+   }
+   if(!confirm("Confirm that you independently verified this student and that this account belongs to them?"))return;
    control.disabled=true;
-   try{await action("processStudentAccount",{entryId:entry.entryId,mode,...(requestId?{requestId}:{})},entry.entryId);}
-   finally{control.disabled=false;}
+   try{
+    await action("processStudentAccount",{
+     entryId:entry.entryId,mode,verificationMethod:method.value,verificationNotes:notes.value,...detail
+    },entry.entryId);
+   }finally{control.disabled=false;}
   };
   return control;
  };
  if(account.linked){
-  if(!account.confirmed){
-   panel.append(el("p","A student account is attached. Confirm it belongs to this student before screening."),button("Confirm student account","confirm"));
-  }else if(entry.nominationFollowUpNeeded){
-   panel.append(el("p","Account confirmed. The student can now complete their nomination follow-up in My Dashboard."));
-  }else panel.append(el("p","The account is confirmed and the entry is ready for eligibility screening."),button("Move to eligibility screening","advance"));
- }else if(account.candidates.length){
-  panel.append(el("p","Review the school and grade on the request and confirm the student’s identity before linking their account."));
-  for(const candidate of account.candidates){
-   const card=el("div",undefined,"workspace-subsection");
-   card.append(el("h3",candidate.studentName),infoRow("School on request",candidate.school),
-    infoRow("Grade on request",candidate.grade),button("Link this student account","link",candidate.requestId));
+  panel.append(el("p","This application or nomination already has a student account attached, but its identity connection has not yet been confirmed.","help"),
+   button("Confirm attached student account","confirm"));
+  return panel;
+ }
+ const requests=account.candidates||[],existing=account.existingAccounts||[];
+ if(requests.length){
+  panel.append(el("h3","Student name-lookup requests"),
+   el("p","These students signed up using their own email and password and requested a connection. Verify each identity independently before approving.","help"));
+  for(const candidate of requests){
+   const card=el("div",undefined,"workspace-subsection account-match-card");
+   card.append(el("strong",candidate.studentName),workspaceFacts([
+    ["School entered",candidate.school||"Not supplied"],
+    ["Grade entered",candidate.grade||"Not supplied"]
+   ]),button("Approve this account request","link",{requestId:candidate.requestId}));
    panel.append(card);
   }
- }else panel.append(el("p","Waiting for the student to find the nomination by name and request a connection from their Beacon account."));
+ }
+ if(existing.length){
+  panel.append(el("h3","Existing Beacon student accounts"),
+   el("p","These accounts are already attached to prior student entries with the same name. Compare the records carefully; identical names alone are not proof of identity.","help"));
+  for(const candidate of existing){
+   const card=el("div",undefined,"workspace-subsection account-match-card");
+   card.append(el("strong","Account from "+(candidate.type==="self"?"student application":"linked nomination")),
+    workspaceFacts([
+     ["School on record",candidate.school||"Not supplied"],
+     ["Grade on record",candidate.grade||"Not supplied"],
+     ["Existing entry stage",statusText(candidate.status)]
+    ]),button("Link this existing account","link_existing",{sourceEntryId:candidate.sourceEntryId}));
+   panel.append(card);
+  }
+ }
+ if(!requests.length&&!existing.length)panel.append(
+  el("p","No matching account request or existing student application is on file yet. The student can visit Check for a nomination, search by name, and sign in or create their own account.","help"),
+  workspaceLink("Open public name lookup","#find-nomination"));
  return panel;
 }
 
