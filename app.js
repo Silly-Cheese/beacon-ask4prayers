@@ -1515,6 +1515,10 @@ function renderAccountProcessing(entry){
  const older=account.legacy;
  if(older)panel.append(el("p","This entry was created before the Processing stage. You can connect or confirm its student account now without changing its selection status, existing reviews, or final decision.","callout"));
  else panel.append(el("p","Confirm who owns this student account. The student can complete nomination follow-up only after their account is linked.","help"));
+ if(selectionFilesClosed(entry.status)&&!entry.canManage){
+  panel.append(el("p","This selection file has a finalized decision. Ask a Beacon administrator to verify and connect the student account; reviewers cannot change finalized account ownership.","help"));
+  return panel;
+ }
  const confirmed=account.linked&&account.confirmed;
  if(confirmed){
   if(entry.nominationFollowUpNeeded){
